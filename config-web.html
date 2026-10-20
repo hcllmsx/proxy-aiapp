@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Proxy-AiApp 配置器 v26.10.20</title>
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <style>
     :root {
       --bg: #f6f5f2;
@@ -216,28 +217,52 @@
 
     /* 目标应用勾选框 */
     .app-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      display: flex;
+      flex-direction: column;
       gap: 10px;
     }
 
     .app-check {
       display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding: 12px 14px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 16px;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: #faf9f7;
       cursor: pointer;
       user-select: none;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .app-check:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .app-check-main {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .app-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      object-fit: contain;
+      flex-shrink: 0;
     }
 
     .app-check input[type="checkbox"] {
-      margin-top: 3px;
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       accent-color: var(--accent);
+      flex-shrink: 0;
+      cursor: pointer;
     }
 
     .app-check-title {
@@ -467,34 +492,43 @@
 
       <div class="app-grid" style="margin-bottom: 16px;">
         <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/gemini.png" alt="Google Gemini">
+            <div>
+              <div class="app-check-title">
+                Google Gemini
+                <span class="install-tag" id="tagGemini">Gemini.exe</span>
+              </div>
+              <div class="app-check-sub" id="subGemini">Gemini.exe 及其 NetworkService 子进程</div>
+            </div>
+          </div>
           <input type="checkbox" id="chkGemini" checked onchange="onTargetCheckChange()">
-          <div>
-            <div class="app-check-title">
-              Google Gemini
-              <span class="install-tag" id="tagGemini">Gemini.exe</span>
-            </div>
-            <div class="app-check-sub" id="subGemini">Gemini.exe 及其 NetworkService 子进程</div>
-          </div>
         </label>
         <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/Antigravity.png" alt="Antigravity">
+            <div>
+              <div class="app-check-title">
+                Antigravity
+                <span class="install-tag" id="tagAntigravity">Antigravity.exe</span>
+              </div>
+              <div class="app-check-sub" id="subAntigravity">Antigravity.exe + Language Server + Node</div>
+            </div>
+          </div>
           <input type="checkbox" id="chkAntigravity" checked onchange="onTargetCheckChange()">
-          <div>
-            <div class="app-check-title">
-              Antigravity
-              <span class="install-tag" id="tagAntigravity">Antigravity.exe</span>
-            </div>
-            <div class="app-check-sub" id="subAntigravity">Antigravity.exe + Language Server + Node</div>
-          </div>
         </label>
         <label class="app-check">
-          <input type="checkbox" id="chkAntigravityIde" checked onchange="onTargetCheckChange()">
-          <div>
-            <div class="app-check-title">
-              Antigravity IDE
-              <span class="install-tag" id="tagAntigravityIde">Antigravity IDE.exe</span>
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/Antigravity%20IDE.png" alt="Antigravity IDE">
+            <div>
+              <div class="app-check-title">
+                Antigravity IDE
+                <span class="install-tag" id="tagAntigravityIde">Antigravity IDE.exe</span>
+              </div>
+              <div class="app-check-sub" id="subAntigravityIde">Antigravity IDE.exe + Language Server + Node</div>
             </div>
-            <div class="app-check-sub" id="subAntigravityIde">Antigravity IDE.exe + Language Server + Node</div>
           </div>
+          <input type="checkbox" id="chkAntigravityIde" checked onchange="onTargetCheckChange()">
         </label>
       </div>
 

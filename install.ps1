@@ -327,6 +327,15 @@ function Start-LocalConfigServer {
                 if ($method -eq "GET" -and ($path -eq "/" -or $path -eq "/config-web.html")) {
                     $contentType = "text/html; charset=utf-8"
                     $respBytes = [System.IO.File]::ReadAllBytes($WebFile)
+                } elseif ($method -eq "GET" -and ($path -eq "/favicon.ico" -or $path -like "/assets/*")) {
+                    $relPath = if ($path -eq "/favicon.ico") { "assets\favicon.ico" } else { ([System.Uri]::UnescapeDataString($path)).TrimStart('/').Replace('/', '\') }
+                    $assetFile = Join-Path $ScriptRoot $relPath
+                    if ((Test-Path $assetFile -PathType Leaf)) {
+                        $contentType = if ($assetFile.EndsWith(".ico")) { "image/x-icon" } else { "image/png" }
+                        $respBytes = [System.IO.File]::ReadAllBytes($assetFile)
+                    } else {
+                        $statusCode = "404 Not Found"
+                    }
                 } elseif ($method -eq "GET" -and $path -eq "/api/status") {
                     $cfgObj = $null
                     if (Test-Path $ConfigFile) {
