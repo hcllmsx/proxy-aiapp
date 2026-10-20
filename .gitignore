@@ -1,0 +1,32 @@
+# Build & output directories
+build/
+out/
+output/
+dist/
+_temp/
+
+# Menu scripts
+1-run_menu.bat
+build_menu.ps1
+
+# Visual Studio / CMake user files
+.vs/
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.vcxproj.user
+
+# Compiled binaries & symbols
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.o
+
+# Runtime logs
+logs/
+*.log
+load-notify-success.marker

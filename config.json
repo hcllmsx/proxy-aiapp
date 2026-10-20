@@ -1,0 +1,67 @@
+{
+  "_version": "26.10.20",
+  "log_level": "info",
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 10808,
+    "type": "socks5"
+  },
+  "fake_ip": {
+    "enabled": true,
+    "cidr": "198.18.0.0/15"
+  },
+  "timeout": {
+    "connect_ms": 5000,
+    "send_ms": 5000,
+    "recv_ms": 5000
+  },
+  "proxy_rules": {
+    "allowed_ports": [
+      80,
+      443
+    ],
+    "dns_mode": "direct",
+    "ipv6_mode": "block",
+    "udp_mode": "block",
+    "udp_fallback": "block",
+    "routing": {
+      "enabled": true,
+      "priority_mode": "order",
+      "default_action": "proxy",
+      "use_default_private": true,
+      "rules": []
+    }
+  },
+  "child_injection": true,
+  "child_injection_mode": "filtered",
+  "child_injection_exclude": [
+    "GeminiCrashpadHandler.exe",
+    "chrome_crashpad_handler.exe"
+  ],
+  "target_processes": [
+    "Antigravity.exe",
+    "Antigravity IDE.exe",
+    "Gemini.exe",
+    "language_server_windows_x64.exe",
+    "language_server.exe",
+    "node.exe",
+    "agy.exe"
+  ],
+  "traffic_logging": false,
+  "diagnostics": {
+    "agent_ip_probe": false
+  },
+  "ui": {
+    "load_notify": "once"
+  },
+  "updates": {
+    "enabled": false,
+    "check_delay_ms": 15000,
+    "timeout_ms": 5000,
+    "notify_once": true,
+    "allow_insecure_mirrors": true,
+    "mirrors": [
+      "https://gh-proxy.com/"
+    ]
+  }
+}

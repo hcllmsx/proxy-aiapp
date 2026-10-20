@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proxy-AiApp 配置器 v26.10.20</title>
+  <style>
+    :root {
+      --bg: #f6f5f2;
+      --card: #ffffff;
+      --border: #e4e2dd;
+      --text: #1c1e21;
+      --muted: #606770;
+      --accent: #0f62fe;
+      --accent-hover: #0043ce;
+      --accent-soft: #edf4ff;
+      --success: #198038;
+      --success-bg: #defbe6;
+      --warn: #b28600;
+      --radius: 12px;
+      --shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 28px 16px 80px;
+    }
+
+    .container {
+      max-width: 984px;
+      margin: 0 auto;
+    }
+
+    /* 顶部栏 */
+    .header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .title-group h1 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge {
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .badge-online {
+      font-size: 0.76rem;
+      font-weight: 600;
+      padding: 2px 9px;
+      border-radius: 6px;
+      background: var(--success-bg);
+      color: var(--success);
+      display: none;
+    }
+
+    .title-group p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 4px;
+    }
+
+    /* 模式切换按钮组 */
+    .mode-switch {
+      display: inline-flex;
+      background: #e8e6e1;
+      padding: 4px;
+      border-radius: 10px;
+    }
+
+    .mode-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 7px 18px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .mode-btn.active {
+      background: var(--card);
+      color: var(--text);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    }
+
+    /* 卡片通用 */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 24px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .card-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-desc {
+      font-size: 0.86rem;
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+
+    /* 一键预设网格 */
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .preset-item {
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      cursor: pointer;
+      background: #faf9f7;
+      transition: all 0.15s ease;
+      text-align: left;
+    }
+
+    .preset-item:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .preset-item.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .preset-name {
+      font-weight: 700;
+      font-size: 0.92rem;
+      color: var(--text);
+    }
+
+    .preset-detail {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 2px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    /* 表单布局 */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.92rem;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus {
+      border-color: var(--accent);
+    }
+
+    /* 目标应用勾选框 */
+    .app-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .app-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #faf9f7;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .app-check input[type="checkbox"] {
+      margin-top: 3px;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .app-check-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .install-tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: #eae8e3;
+      color: var(--muted);
+    }
+
+    .install-tag.installed {
+      background: var(--success-bg);
+      color: var(--success);
+    }
+
+    .app-check-sub {
+      font-size: 0.76rem;
+      color: var(--muted);
+      margin-top: 2px;
+      word-break: break-all;
+    }
+
+    /* 底部操作栏 */
+    .action-bar {
+      position: sticky;
+      bottom: 14px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 10px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+      z-index: 20;
+    }
+
+    .status-text {
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .status-text strong {
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .btn-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .btn {
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: var(--text);
+      font-size: 0.88rem;
+      font-weight: 600;
+      padding: 9px 15px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      background: #f3f1ed;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .btn-success {
+      background: var(--success);
+      border-color: var(--success);
+      color: #ffffff;
+    }
+
+    .btn-success:hover {
+      background: #0e6027;
+    }
+
+    .advanced-only {
+      display: none;
+    }
+
+    body.mode-advanced .advanced-only {
+      display: block;
+    }
+
+    .json-area {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #faf9f7;
+      color: var(--text);
+      outline: none;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.84rem;
+      min-height: 240px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #1e293b;
+      color: #ffffff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 0.86rem;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-8px);
+      transition: all 0.2s ease;
+      z-index: 100;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title-group">
+        <h1>
+          Proxy-AiApp 配置器
+          <span class="badge">v26.10.20</span>
+          <span class="badge-online" id="localBridgeBadge">本地直写服务已连接</span>
+        </h1>
+        <p id="subHeaderText">统一支持 Google Gemini 桌面版、Antigravity 与 Antigravity IDE</p>
+      </div>
+      <div class="mode-switch">
+        <button type="button" class="mode-btn active" id="btnSimple" onclick="setMode('simple')">简单模式</button>
+        <button type="button" class="mode-btn" id="btnAdvanced" onclick="setMode('advanced')">高级模式</button>
+      </div>
+    </div>
+
+    <!-- 第一步：代理服务器设置（简单/高级共用） -->
+    <div class="card">
+      <div class="card-title">1. 选择代理软件预设或填写端口</div>
+      <div class="card-desc">点击下方常用代理客户端预设即可一键填入，或手动修改代理地址与端口。</div>
+
+      <div class="preset-grid">
+        <button type="button" class="preset-item active" id="preset-v2ray-socks" onclick="applyPreset('socks5', '127.0.0.1', 10808, 'preset-v2ray-socks')">
+          <div class="preset-name">V2RayN 默认 (推荐)</div>
+          <div class="preset-detail">socks5://127.0.0.1:10808</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-clash-socks" onclick="applyPreset('socks5', '127.0.0.1', 7890, 'preset-clash-socks')">
+          <div class="preset-name">Clash / Mihomo / Verge</div>
+          <div class="preset-detail">socks5://127.0.0.1:7890</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-v2ray-http" onclick="applyPreset('http', '127.0.0.1', 10809, 'preset-v2ray-http')">
+          <div class="preset-name">V2RayN HTTP 代理</div>
+          <div class="preset-detail">http://127.0.0.1:10809</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-clash-http" onclick="applyPreset('http', '127.0.0.1', 7890, 'preset-clash-http')">
+          <div class="preset-name">Clash HTTP 混合端口</div>
+          <div class="preset-detail">http://127.0.0.1:7890</div>
+        </button>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="proxyType">代理协议类型</label>
+          <select id="proxyType" onchange="onFormChange()">
+            <option value="socks5">SOCKS5 代理 (推荐)</option>
+            <option value="http">HTTP 代理 (支持 CONNECT)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="proxyHost">代理服务器地址</label>
+          <input type="text" id="proxyHost" value="127.0.0.1" placeholder="127.0.0.1" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="proxyPort">代理端口</label>
+          <input type="number" id="proxyPort" value="10808" min="1" max="65535" oninput="onFormChange()">
+        </div>
+      </div>
+    </div>
+
+    <!-- 第二步：生效目标与提示行为 -->
+    <div class="card">
+      <div class="card-title">2. 生效目标软件与加载提示</div>
+      <div class="card-desc">勾选需要生效的目标软件；通过安装脚本启动本页面时，可直接点击右下角按钮一键写入并安装到勾选的软件。</div>
+
+      <div class="app-grid" style="margin-bottom: 16px;">
+        <label class="app-check">
+          <input type="checkbox" id="chkGemini" checked onchange="onTargetCheckChange()">
+          <div>
+            <div class="app-check-title">
+              Google Gemini
+              <span class="install-tag" id="tagGemini">Gemini.exe</span>
+            </div>
+            <div class="app-check-sub" id="subGemini">Gemini.exe 及其 NetworkService 子进程</div>
+          </div>
+        </label>
+        <label class="app-check">
+          <input type="checkbox" id="chkAntigravity" checked onchange="onTargetCheckChange()">
+          <div>
+            <div class="app-check-title">
+              Antigravity
+              <span class="install-tag" id="tagAntigravity">Antigravity.exe</span>
+            </div>
+            <div class="app-check-sub" id="subAntigravity">Antigravity.exe + Language Server + Node</div>
+          </div>
+        </label>
+        <label class="app-check">
+          <input type="checkbox" id="chkAntigravityIde" checked onchange="onTargetCheckChange()">
+          <div>
+            <div class="app-check-title">
+              Antigravity IDE
+              <span class="install-tag" id="tagAntigravityIde">Antigravity IDE.exe</span>
+            </div>
+            <div class="app-check-sub" id="subAntigravityIde">Antigravity IDE.exe + Language Server + Node</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="uiNotify">启动加载弹窗提示</label>
+          <select id="uiNotify" onchange="onFormChange()">
+            <option value="once">仅首次加载成功提示一次 (推荐)</option>
+            <option value="none">静默运行 (成功时不弹窗)</option>
+            <option value="always">每次启动软件都弹窗提示</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="logLevel">运行日志级别</label>
+          <select id="logLevel" onchange="onFormChange()">
+            <option value="info">标准信息 (info，日常推荐)</option>
+            <option value="debug">详细调试 (debug，排查问题时开启)</option>
+            <option value="warn">仅警告与错误 (warn)</option>
+            <option value="error">仅错误 (error)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：协议策略与 FakeIP -->
+    <div class="card advanced-only">
+      <div class="card-title">3. 网络协议策略与 FakeIP (高级)</div>
+      <div class="card-desc">默认已针对 Gemini 与 Antigravity 调优：开启 FakeIP 并阻断 QUIC(UDP) 以强制稳定走 TCP 代理隧道。</div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="fakeIpEnabled">FakeIP 虚拟域名映射</label>
+          <select id="fakeIpEnabled" onchange="onFormChange()">
+            <option value="true">开启 (推荐，防 DNS 污染并按域名分流)</option>
+            <option value="false">关闭</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="fakeIpCidr">FakeIP 地址池网段</label>
+          <input type="text" id="fakeIpCidr" value="198.18.0.0/15" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="udpMode">UDP / QUIC 处理策略</label>
+          <select id="udpMode" onchange="onFormChange()">
+            <option value="block">阻断 UDP 迫使回退 TCP (block，推荐最稳)</option>
+            <option value="auto">自动 (SOCKS5 尝试 UDP Associate)</option>
+            <option value="proxy">强制走 SOCKS5 UDP 代理 (proxy)</option>
+            <option value="direct">UDP 直连 (direct)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ipv6Mode">IPv6 处理策略</label>
+          <select id="ipv6Mode" onchange="onFormChange()">
+            <option value="block">阻止纯 IPv6 连接防泄漏 (block，推荐)</option>
+            <option value="proxy">IPv6 走代理 (proxy)</option>
+            <option value="direct">IPv6 直连 (direct)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="dnsMode">DNS (53 端口) 策略</label>
+          <select id="dnsMode" onchange="onFormChange()">
+            <option value="direct">直连并配合 FakeIP 拦截 (direct，推荐)</option>
+            <option value="proxy">53 端口走代理 (proxy)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="allowedPorts">允许走代理的目标端口 (逗号分隔)</label>
+          <input type="text" id="allowedPorts" value="80, 443" placeholder="80, 443 (留空表示全部端口)" oninput="onFormChange()">
+        </div>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：超时与进程列表 -->
+    <div class="card advanced-only">
+      <div class="card-title">4. 超时控制与目标进程列表 (高级)</div>
+      <div class="card-desc">一行一个进程名，子进程注入器会按此列表自动注入代理 Hook。</div>
+
+      <div class="form-grid" style="margin-bottom: 14px;">
+        <div class="field">
+          <label for="connectTimeout">连接超时 (毫秒)</label>
+          <input type="number" id="connectTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="sendTimeout">发送超时 (毫秒)</label>
+          <input type="number" id="sendTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="recvTimeout">接收超时 (毫秒)</label>
+          <input type="number" id="recvTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="targetProcesses">目标进程列表 (每行一个可执行文件名)</label>
+        <textarea id="targetProcesses" rows="6" class="json-area" style="min-height: 130px;" oninput="onFormChange()"></textarea>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：JSON 实时预览 -->
+    <div class="card advanced-only">
+      <div class="card-title">5. config.json 实时预览</div>
+      <div class="card-desc">可以直接复制下方内容保存到应用目录的 config.json 中。</div>
+      <textarea id="jsonPreview" class="json-area" readonly></textarea>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div class="action-bar">
+      <div class="status-text">
+        当前配置：<strong id="summaryText">socks5://127.0.0.1:10808</strong>
+      </div>
+      <div class="btn-group">
+        <input type="file" id="fileInput" accept=".json,application/json" style="display:none" onchange="onFileSelected(event)">
+        <button type="button" class="btn" id="btnOpenFile" onclick="openConfigFile()">读取 config.json</button>
+        <button type="button" class="btn btn-primary" id="btnSaveOnly" onclick="saveConfigFile()">保存 config.json</button>
+        <button type="button" class="btn btn-success" id="btnSaveAndInstall" style="display:none" onclick="saveAndInstall()">保存并一键安装到勾选软件</button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="https://github.com/hcllmsx/proxy-aiapp" target="_blank" rel="noopener">Proxy-AiApp</a> v26.10.20 · <a href="https://space.bilibili.com/255947051" target="_blank" rel="noopener">莫莫先生</a>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">已保存</div>
+
+  <script>
+    let currentFileHandle = null;
+    let extraConfigState = null;
+    let hasLocalBackend = false;
+
+    const DEFAULT_PROCESSES = [
+      "Antigravity.exe",
+      "Antigravity IDE.exe",
+      "Gemini.exe",
+      "language_server_windows_x64.exe",
+      "language_server.exe",
+      "node.exe",
+      "agy.exe"
+    ];
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => el.classList.remove('show'), 2600);
+    }
+
+    function setMode(mode) {
+      const isAdv = mode === 'advanced';
+      document.body.classList.toggle('mode-advanced', isAdv);
+      document.getElementById('btnSimple').classList.toggle('active', !isAdv);
+      document.getElementById('btnAdvanced').classList.toggle('active', isAdv);
+    }
+
+    function applyPreset(type, host, port, presetId) {
+      document.getElementById('proxyType').value = type;
+      document.getElementById('proxyHost').value = host;
+      document.getElementById('proxyPort').value = port;
+      document.querySelectorAll('.preset-item').forEach(btn => {
+        btn.classList.toggle('active', btn.id === presetId);
+      });
+      onFormChange();
+    }
+
+    function syncPresetHighlight() {
+      const type = document.getElementById('proxyType').value;
+      const host = document.getElementById('proxyHost').value.trim();
+      const port = Number(document.getElementById('proxyPort').value);
+      const map = {
+        'socks5:127.0.0.1:10808': 'preset-v2ray-socks',
+        'socks5:127.0.0.1:7890': 'preset-clash-socks',
+        'http:127.0.0.1:10809': 'preset-v2ray-http',
+        'http:127.0.0.1:7890': 'preset-clash-http'
+      };
+      const activeId = map[`${type}:${host}:${port}`] || '';
+      document.querySelectorAll('.preset-item').forEach(btn => {
+        btn.classList.toggle('active', btn.id === activeId);
+      });
+    }
+
+    function onTargetCheckChange() {
+      const lines = document.getElementById('targetProcesses').value
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      const set = new Set(lines);
+
+      const toggleProc = (checked, name) => {
+        for (const item of Array.from(set)) {
+          if (item.toLowerCase() === name.toLowerCase()) set.delete(item);
+        }
+        if (checked) set.add(name);
+      };
+
+      toggleProc(document.getElementById('chkGemini').checked, 'Gemini.exe');
+      toggleProc(document.getElementById('chkAntigravity').checked, 'Antigravity.exe');
+      toggleProc(document.getElementById('chkAntigravityIde').checked, 'Antigravity IDE.exe');
+
+      ['language_server_windows_x64.exe', 'language_server.exe', 'node.exe', 'agy.exe'].forEach(p => {
+        const exists = Array.from(set).some(x => x.toLowerCase() === p.toLowerCase());
+        if (!exists) set.add(p);
+      });
+
+      document.getElementById('targetProcesses').value = Array.from(set).join('\n');
+      onFormChange();
+    }
+
+    function syncCheckboxesFromProcessList(list) {
+      const lower = new Set((list || []).map(s => String(s).toLowerCase()));
+      document.getElementById('chkGemini').checked = lower.has('gemini.exe');
+      document.getElementById('chkAntigravity').checked = lower.has('antigravity.exe');
+      document.getElementById('chkAntigravityIde').checked = lower.has('antigravity ide.exe');
+    }
+
+    function buildConfigObject() {
+      const type = document.getElementById('proxyType').value;
+      const host = document.getElementById('proxyHost').value.trim() || '127.0.0.1';
+      const port = Math.max(0, Math.min(65535, parseInt(document.getElementById('proxyPort').value, 10) || 10808));
+
+      const allowedPortsRaw = document.getElementById('allowedPorts').value;
+      const allowedPorts = allowedPortsRaw
+        .split(/[,\s]+/)
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => Number.isInteger(n) && n >= 1 && n <= 65535);
+
+      const procLines = document.getElementById('targetProcesses').value
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      const base = extraConfigState ? JSON.parse(JSON.stringify(extraConfigState)) : {};
+
+      const cfg = Object.assign({}, base, {
+        _version: "26.10.20",
+        log_level: document.getElementById('logLevel').value,
+        proxy: {
+          host,
+          port,
+          type
+        },
+        fake_ip: {
+          enabled: document.getElementById('fakeIpEnabled').value === 'true',
+          cidr: document.getElementById('fakeIpCidr').value.trim() || '198.18.0.0/15'
+        },
+        timeout: {
+          connect_ms: parseInt(document.getElementById('connectTimeout').value, 10) || 5000,
+          send_ms: parseInt(document.getElementById('sendTimeout').value, 5000) || 5000,
+          recv_ms: parseInt(document.getElementById('recvTimeout').value, 5000) || 5000
+        },
+        proxy_rules: Object.assign({}, base.proxy_rules || {}, {
+          allowed_ports: allowedPorts,
+          dns_mode: document.getElementById('dnsMode').value,
+          ipv6_mode: document.getElementById('ipv6Mode').value,
+          udp_mode: document.getElementById('udpMode').value,
+          udp_fallback: "block",
+          routing: (base.proxy_rules && base.proxy_rules.routing) ? base.proxy_rules.routing : {
+            enabled: true,
+            priority_mode: "order",
+            default_action: "proxy",
+            use_default_private: true,
+            rules: []
+          }
+        }),
+        child_injection: true,
+        child_injection_mode: "filtered",
+        child_injection_exclude: [
+          "GeminiCrashpadHandler.exe",
+          "chrome_crashpad_handler.exe"
+        ],
+        target_processes: procLines.length ? procLines : DEFAULT_PROCESSES.slice(),
+        traffic_logging: Boolean(base.traffic_logging),
+        diagnostics: base.diagnostics || { agent_ip_probe: false },
+        ui: {
+          load_notify: document.getElementById('uiNotify').value
+        },
+        updates: base.updates || {
+          enabled: false,
+          check_delay_ms: 15000,
+          timeout_ms: 5000,
+          notify_once: true,
+          allow_insecure_mirrors: true,
+          mirrors: [
+            "https://gh-proxy.org/",
+            "https://hk.gh-proxy.org/",
+            "https://cdn.gh-proxy.org/",
+            "https://edgeone.gh-proxy.org/"
+          ]
+        }
+      });
+
+      return cfg;
+    }
+
+    function onFormChange() {
+      syncPresetHighlight();
+      const cfg = buildConfigObject();
+      syncCheckboxesFromProcessList(cfg.target_processes);
+      document.getElementById('summaryText').textContent = `${cfg.proxy.type}://${cfg.proxy.host}:${cfg.proxy.port}`;
+      document.getElementById('jsonPreview').value = JSON.stringify(cfg, null, 2);
+    }
+
+    function applyConfigToForm(cfg) {
+      extraConfigState = cfg;
+      if (cfg.proxy) {
+        document.getElementById('proxyType').value = (cfg.proxy.type || 'socks5').toLowerCase() === 'http' ? 'http' : 'socks5';
+        document.getElementById('proxyHost').value = cfg.proxy.host || '127.0.0.1';
+        document.getElementById('proxyPort').value = cfg.proxy.port ?? 10808;
+      } else if (Array.isArray(cfg.proxies) && cfg.proxies.length > 0) {
+        const p = cfg.proxies[0];
+        document.getElementById('proxyType').value = (p.type || 'socks5').toLowerCase() === 'http' ? 'http' : 'socks5';
+        document.getElementById('proxyHost').value = p.host || '127.0.0.1';
+        document.getElementById('proxyPort').value = p.port ?? 10808;
+      }
+      if (cfg.log_level) {
+        document.getElementById('logLevel').value = cfg.log_level;
+      }
+      if (cfg.ui && cfg.ui.load_notify) {
+        document.getElementById('uiNotify').value = cfg.ui.load_notify;
+      }
+      if (cfg.fake_ip) {
+        document.getElementById('fakeIpEnabled').value = cfg.fake_ip.enabled !== false ? 'true' : 'false';
+        document.getElementById('fakeIpCidr').value = cfg.fake_ip.cidr || '198.18.0.0/15';
+      }
+      if (cfg.timeout) {
+        document.getElementById('connectTimeout').value = cfg.timeout.connect_ms || cfg.timeout.connect || 5000;
+        document.getElementById('sendTimeout').value = cfg.timeout.send_ms || cfg.timeout.send || 5000;
+        document.getElementById('recvTimeout').value = cfg.timeout.recv_ms || cfg.timeout.recv || 5000;
+      }
+      if (cfg.proxy_rules) {
+        if (Array.isArray(cfg.proxy_rules.allowed_ports)) {
+          document.getElementById('allowedPorts').value = cfg.proxy_rules.allowed_ports.join(', ');
+        }
+        if (cfg.proxy_rules.dns_mode) document.getElementById('dnsMode').value = cfg.proxy_rules.dns_mode;
+        if (cfg.proxy_rules.ipv6_mode) document.getElementById('ipv6Mode').value = cfg.proxy_rules.ipv6_mode;
+        if (cfg.proxy_rules.udp_mode) document.getElementById('udpMode').value = cfg.proxy_rules.udp_mode;
+      }
+      const procs = Array.isArray(cfg.target_processes) && cfg.target_processes.length
+        ? cfg.target_processes.slice()
+        : DEFAULT_PROCESSES.slice();
+      if (!procs.some(p => String(p).toLowerCase() === 'gemini.exe')) {
+        procs.push('Gemini.exe');
+      }
+      document.getElementById('targetProcesses').value = procs.join('\n');
+      syncCheckboxesFromProcessList(procs);
+      onFormChange();
+    }
+
+    function updateDetectedTargetsUI(targets) {
+      if (!Array.isArray(targets)) return;
+      const map = {
+        gemini: { tag: 'tagGemini', sub: 'subGemini' },
+        antigravity: { tag: 'tagAntigravity', sub: 'subAntigravity' },
+        antigravity_ide: { tag: 'tagAntigravityIde', sub: 'subAntigravityIde' }
+      };
+      targets.forEach(t => {
+        const ui = map[t.key];
+        if (!ui) return;
+        const tagEl = document.getElementById(ui.tag);
+        const subEl = document.getElementById(ui.sub);
+        if (t.found) {
+          tagEl.textContent = t.installed ? '已安装代理' : '已检测到软件';
+          tagEl.classList.toggle('installed', Boolean(t.installed));
+          subEl.textContent = t.directory;
+        } else {
+          tagEl.textContent = '本机未检测到';
+          tagEl.classList.remove('installed');
+        }
+      });
+    }
+
+    async function probeLocalBackend() {
+      if (!location.protocol.startsWith('http')) return;
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        hasLocalBackend = true;
+        document.getElementById('localBridgeBadge').style.display = 'inline-block';
+        document.getElementById('btnSaveAndInstall').style.display = 'inline-block';
+        document.getElementById('btnSaveOnly').textContent = '直接保存 config.json';
+        if (data.config) {
+          applyConfigToForm(data.config);
+        }
+        if (data.targets) {
+          updateDetectedTargetsUI(data.targets);
+        }
+      } catch (_) {}
+    }
+
+    async function openConfigFile() {
+      if (hasLocalBackend) {
+        try {
+          const res = await fetch('/api/status', { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.config) {
+              applyConfigToForm(data.config);
+              showToast('已重新读取本地 config.json');
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+      if (window.showOpenFilePicker) {
+        try {
+          const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'JSON 配置文件', accept: { 'application/json': ['.json'] } }]
+          });
+          currentFileHandle = handle;
+          const file = await handle.getFile();
+          const text = await file.text();
+          applyConfigToForm(JSON.parse(text));
+          showToast('已读取: ' + file.name);
+          return;
+        } catch (e) {
+          if (e && e.name === 'AbortError') return;
+        }
+      }
+      document.getElementById('fileInput').click();
+    }
+
+    function onFileSelected(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          applyConfigToForm(JSON.parse(String(reader.result)));
+          showToast('已读取: ' + file.name);
+        } catch (err) {
+          alert('解析 JSON 失败: ' + err.message);
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+      event.target.value = '';
+    }
+
+    async function saveConfigFile() {
+      const content = document.getElementById('jsonPreview').value + '\n';
+      if (hasLocalBackend) {
+        try {
+          const res = await fetch('/api/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: content
+          });
+          const data = await res.json();
+          if (data.ok) {
+            showToast('已直接保存到本地 config.json（双击 install.bat 即可安装）');
+            return;
+          }
+          alert('保存失败: ' + (data.error || '未知错误'));
+          return;
+        } catch (err) {
+          alert('请求本地服务失败: ' + err.message);
+          return;
+        }
+      }
+      if (currentFileHandle && currentFileHandle.createWritable) {
+        try {
+          const writable = await currentFileHandle.createWritable();
+          await writable.write(content);
+          await writable.close();
+          showToast('已直接保存至 config.json（双击 install.bat 即可安装）');
+          return;
+        } catch (_) {}
+      }
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: 'config.json',
+            types: [{ description: 'JSON 配置文件', accept: { 'application/json': ['.json'] } }]
+          });
+          currentFileHandle = handle;
+          const writable = await handle.createWritable();
+          await writable.write(content);
+          await writable.close();
+          showToast('config.json 已保存（双击 install.bat 即可安装）');
+          return;
+        } catch (e) {
+          if (e && e.name === 'AbortError') return;
+        }
+      }
+      const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'config.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('已保存 config.json');
+    }
+
+    async function saveAndInstall() {
+      if (!hasLocalBackend) return;
+      const cfg = buildConfigObject();
+      const selectedKeys = [];
+      if (document.getElementById('chkGemini').checked) selectedKeys.push('gemini');
+      if (document.getElementById('chkAntigravity').checked) selectedKeys.push('antigravity');
+      if (document.getElementById('chkAntigravityIde').checked) selectedKeys.push('antigravity_ide');
+
+      try {
+        const res = await fetch('/api/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: cfg,
+            targets: selectedKeys
+          })
+        });
+        const data = await res.json();
+        if (data.targets) {
+          updateDetectedTargetsUI(data.targets);
+        }
+        if (data.ok) {
+          showToast(data.message || '已保存并安装到勾选软件');
+        } else {
+          alert(data.message || '部分软件安装失败，请先关闭正在运行的目标软件后重试');
+        }
+      } catch (err) {
+        alert('安装请求失败: ' + err.message);
+      }
+    }
+
+    // 初始化默认进程列表与 JSON
+    document.getElementById('targetProcesses').value = DEFAULT_PROCESSES.join('\n');
+    onFormChange();
+    probeLocalBackend();
+  </script>
+</body>
+</html>
