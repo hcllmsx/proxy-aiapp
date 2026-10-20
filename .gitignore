@@ -9,8 +9,9 @@ _temp/
 1-run_menu.bat
 build_menu.ps1
 
-# Visual Studio / CMake user files
+# Visual Studio / VS Code / CMake user files
 .vs/
+.vscode/
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles/
