@@ -306,14 +306,12 @@ void MaybeShowLoadNotifyAsync(bool success) {
   payload->success = success;
   payload->askOpenLogs = true;
   const std::wstring dllVersion = Utf8ToWideLocal(PROXY_AIAPP_VERSION);
+  const std::wstring hint = onceMode ? L"\n\n按配置要求，本通知只会弹窗一次。" : L"";
   if (success) {
-    payload->message = L"Proxy-AiApp (v" + dllVersion +
-                       L") 加载成功。\n\n"
-                       L"按配置要求，本通知只会弹窗一次。";
+    payload->message = L"Proxy-AiApp (v" + dllVersion + L") 加载成功。" + hint;
   } else {
-    payload->message = L"Proxy-AiApp (v" + dllVersion +
-                       L") 加载失败，请打开日志以排查。\n\n"
-                       L"按配置要求，本通知只会弹窗一次。";
+    payload->message =
+        L"Proxy-AiApp (v" + dllVersion + L") 加载失败，请打开日志以排查。" + hint;
   }
 
   HANDLE hThread =
