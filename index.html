@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proxy-AiApp 配置器 v26.10.20</title>
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="stylesheet" href="assets/css/config-web.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title-group">
+        <h1>
+          Proxy-AiApp 配置器
+          <span class="badge">v26.10.20</span>
+          <span class="badge-online" id="localBridgeBadge">本地直写服务已连接</span>
+        </h1>
+        <p id="subHeaderText">统一支持 Google Gemini 桌面版、Antigravity 与 Antigravity IDE</p>
+      </div>
+      <div class="mode-switch">
+        <button type="button" class="mode-btn active" id="btnSimple" onclick="setMode('simple')">简单模式</button>
+        <button type="button" class="mode-btn" id="btnAdvanced" onclick="setMode('advanced')">高级模式</button>
+      </div>
+    </div>
+
+    <!-- 第一步：代理服务器设置（简单/高级共用） -->
+    <div class="card">
+      <div class="card-title">1. 选择代理软件预设或填写端口</div>
+      <div class="card-desc">点击下方常用代理客户端预设即可一键填入，或手动修改代理地址与端口。</div>
+
+      <div class="preset-grid">
+        <button type="button" class="preset-item active" id="preset-v2ray-socks" onclick="applyPreset('socks5', '127.0.0.1', 10808, 'preset-v2ray-socks')">
+          <div class="preset-name">V2RayN 默认 (推荐)</div>
+          <div class="preset-detail">socks5://127.0.0.1:10808</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-clash-socks" onclick="applyPreset('socks5', '127.0.0.1', 7890, 'preset-clash-socks')">
+          <div class="preset-name">Clash / Mihomo / Verge</div>
+          <div class="preset-detail">socks5://127.0.0.1:7890</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-v2ray-http" onclick="applyPreset('http', '127.0.0.1', 10809, 'preset-v2ray-http')">
+          <div class="preset-name">V2RayN HTTP 代理</div>
+          <div class="preset-detail">http://127.0.0.1:10809</div>
+        </button>
+        <button type="button" class="preset-item" id="preset-clash-http" onclick="applyPreset('http', '127.0.0.1', 7890, 'preset-clash-http')">
+          <div class="preset-name">Clash HTTP 混合端口</div>
+          <div class="preset-detail">http://127.0.0.1:7890</div>
+        </button>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="proxyType">代理协议类型</label>
+          <select id="proxyType" onchange="onFormChange()">
+            <option value="socks5">SOCKS5 代理 (推荐)</option>
+            <option value="http">HTTP 代理 (支持 CONNECT)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="proxyHost">代理服务器地址</label>
+          <input type="text" id="proxyHost" value="127.0.0.1" placeholder="127.0.0.1" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="proxyPort">代理端口</label>
+          <input type="number" id="proxyPort" value="10808" min="1" max="65535" oninput="onFormChange()">
+        </div>
+      </div>
+    </div>
+
+    <!-- 第二步：生效目标与提示行为 -->
+    <div class="card">
+      <div class="card-title">2. 生效目标软件与加载提示</div>
+      <div class="card-desc">勾选需要生效的目标软件；通过安装脚本启动本页面时，可直接点击右下角按钮一键写入并安装到勾选的软件。</div>
+
+      <div class="app-grid" style="margin-bottom: 16px;">
+        <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/img/gemini.png" alt="Google Gemini">
+            <div>
+              <div class="app-check-title">
+                Google Gemini
+                <span class="install-tag" id="tagGemini">Gemini.exe</span>
+              </div>
+              <div class="app-check-sub" id="subGemini">Gemini.exe 及其 NetworkService 子进程</div>
+            </div>
+          </div>
+          <input type="checkbox" id="chkGemini" checked onchange="onTargetCheckChange()">
+        </label>
+        <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/img/Antigravity.png" alt="Antigravity">
+            <div>
+              <div class="app-check-title">
+                Antigravity
+                <span class="install-tag" id="tagAntigravity">Antigravity.exe</span>
+              </div>
+              <div class="app-check-sub" id="subAntigravity">Antigravity.exe + Language Server + Node</div>
+            </div>
+          </div>
+          <input type="checkbox" id="chkAntigravity" checked onchange="onTargetCheckChange()">
+        </label>
+        <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/img/Antigravity%20IDE.png" alt="Antigravity IDE">
+            <div>
+              <div class="app-check-title">
+                Antigravity IDE
+                <span class="install-tag" id="tagAntigravityIde">Antigravity IDE.exe</span>
+              </div>
+              <div class="app-check-sub" id="subAntigravityIde">Antigravity IDE.exe + Language Server + Node</div>
+            </div>
+          </div>
+          <input type="checkbox" id="chkAntigravityIde" checked onchange="onTargetCheckChange()">
+        </label>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="uiNotify">启动加载弹窗提示</label>
+          <select id="uiNotify" onchange="onFormChange()">
+            <option value="once">仅首次加载成功提示一次 (推荐)</option>
+            <option value="none">静默运行 (成功时不弹窗)</option>
+            <option value="always">每次启动软件都弹窗提示</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="logLevel">运行日志级别</label>
+          <select id="logLevel" onchange="onFormChange()">
+            <option value="info">标准信息 (info，日常推荐)</option>
+            <option value="debug">详细调试 (debug，排查问题时开启)</option>
+            <option value="warn">仅警告与错误 (warn)</option>
+            <option value="error">仅错误 (error)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：协议策略与 FakeIP -->
+    <div class="card advanced-only">
+      <div class="card-title">3. 网络协议策略与 FakeIP (高级)</div>
+      <div class="card-desc">默认已针对 Gemini 与 Antigravity 调优：开启 FakeIP 并阻断 QUIC(UDP) 以强制稳定走 TCP 代理隧道。</div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="fakeIpEnabled">FakeIP 虚拟域名映射</label>
+          <select id="fakeIpEnabled" onchange="onFormChange()">
+            <option value="true">开启 (推荐，防 DNS 污染并按域名分流)</option>
+            <option value="false">关闭</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="fakeIpCidr">FakeIP 地址池网段</label>
+          <input type="text" id="fakeIpCidr" value="198.18.0.0/15" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="udpMode">UDP / QUIC 处理策略</label>
+          <select id="udpMode" onchange="onFormChange()">
+            <option value="block">阻断 UDP 迫使回退 TCP (block，推荐最稳)</option>
+            <option value="auto">自动 (SOCKS5 尝试 UDP Associate)</option>
+            <option value="proxy">强制走 SOCKS5 UDP 代理 (proxy)</option>
+            <option value="direct">UDP 直连 (direct)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ipv6Mode">IPv6 处理策略</label>
+          <select id="ipv6Mode" onchange="onFormChange()">
+            <option value="block">阻止纯 IPv6 连接防泄漏 (block，推荐)</option>
+            <option value="proxy">IPv6 走代理 (proxy)</option>
+            <option value="direct">IPv6 直连 (direct)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="dnsMode">DNS (53 端口) 策略</label>
+          <select id="dnsMode" onchange="onFormChange()">
+            <option value="direct">直连并配合 FakeIP 拦截 (direct，推荐)</option>
+            <option value="proxy">53 端口走代理 (proxy)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="allowedPorts">允许走代理的目标端口 (逗号分隔)</label>
+          <input type="text" id="allowedPorts" value="80, 443" placeholder="80, 443 (留空表示全部端口)" oninput="onFormChange()">
+        </div>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：超时与进程列表 -->
+    <div class="card advanced-only">
+      <div class="card-title">4. 超时控制与目标进程列表 (高级)</div>
+      <div class="card-desc">一行一个进程名，子进程注入器会按此列表自动注入代理 Hook。</div>
+
+      <div class="form-grid" style="margin-bottom: 14px;">
+        <div class="field">
+          <label for="connectTimeout">连接超时 (毫秒)</label>
+          <input type="number" id="connectTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="sendTimeout">发送超时 (毫秒)</label>
+          <input type="number" id="sendTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+        <div class="field">
+          <label for="recvTimeout">接收超时 (毫秒)</label>
+          <input type="number" id="recvTimeout" value="5000" min="500" max="60000" oninput="onFormChange()">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="targetProcesses">目标进程列表 (每行一个可执行文件名)</label>
+        <textarea id="targetProcesses" rows="6" class="json-area" style="min-height: 130px;" oninput="onFormChange()"></textarea>
+      </div>
+    </div>
+
+    <!-- 高级模式专属：JSON 实时预览 -->
+    <div class="card advanced-only">
+      <div class="card-title">5. config.json 实时预览</div>
+      <div class="card-desc">可以直接复制下方内容保存到应用目录的 config.json 中。</div>
+      <textarea id="jsonPreview" class="json-area" readonly></textarea>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div class="action-bar">
+      <div class="status-text">
+        当前配置：<strong id="summaryText">socks5://127.0.0.1:10808</strong>
+      </div>
+      <div class="btn-group">
+        <input type="file" id="fileInput" accept=".json,application/json" style="display:none" onchange="onFileSelected(event)">
+        <button type="button" class="btn" id="btnOpenFile" onclick="openConfigFile()">读取 config.json</button>
+        <button type="button" class="btn btn-primary" id="btnSaveOnly" onclick="saveConfigFile()">保存 config.json</button>
+        <button type="button" class="btn btn-success" id="btnSaveAndInstall" style="display:none" onclick="saveAndInstall()">保存并一键安装到勾选软件</button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="https://github.com/hcllmsx/proxy-aiapp" target="_blank" rel="noopener">Proxy-AiApp</a> v26.10.20 · <a href="https://space.bilibili.com/255947051" target="_blank" rel="noopener">莫莫先生</a>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">已保存</div>
+
+  <script src="assets/js/config-web.js"></script>
+</body>
+</html>

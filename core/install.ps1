@@ -5,19 +5,22 @@
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ScriptRoot
+$CoreDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$AppRoot = Split-Path -Parent $CoreDir
+Set-Location $AppRoot
 
-$ConfigFile = Join-Path $ScriptRoot "config.json"
-$WebFile    = Join-Path $ScriptRoot "config-web.html"
+$ConfigFile = Join-Path $CoreDir "config.json"
+$WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
 $CurrentVer = "26.10.20"
 
 function Get-DllSourcePath {
-    $localDll = Join-Path $ScriptRoot "version.dll"
-    if (Test-Path $localDll) { return $localDll }
-    $buildDll = Join-Path $ScriptRoot "_temp\build-x64\Release\version.dll"
+    $coreDll = Join-Path $CoreDir "version.dll"
+    if (Test-Path $coreDll) { return $coreDll }
+    $buildDll = Join-Path $AppRoot "_temp\build-x64\Release\version.dll"
     if (Test-Path $buildDll) { return $buildDll }
+    $rootDll = Join-Path $AppRoot "version.dll"
+    if (Test-Path $rootDll) { return $rootDll }
     return $null
 }
 
@@ -83,7 +86,7 @@ function Install-ProxyToSlot {
         return $false
     }
     if (-not (Test-Path $ConfigFile)) {
-        Write-Host "  [!] 未找到 config.json 配置文件。" -ForegroundColor Red
+        Write-Host "  [!] 未找到 core\config.json 配置文件。" -ForegroundColor Red
         return $false
     }
     try {
@@ -108,7 +111,7 @@ function Uninstall-ProxyFromSlot {
         return
     }
     try {
-        foreach ($f in @("version.dll", "dbghelp.dll", "config.json", "config-web.html")) {
+        foreach ($f in @("version.dll", "dbghelp.dll", "config.json", "index.html", "config-web.html")) {
             $p = Join-Path $Slot.Directory $f
             if (Test-Path $p) { Remove-Item $p -Force }
         }
@@ -239,7 +242,7 @@ function Invoke-CheckUpdate {
 
 function Start-LocalConfigServer {
     if (-not (Test-Path $WebFile)) {
-        Write-Host "  [!] 未找到 config-web.html" -ForegroundColor Red
+        Write-Host "  [!] 未找到 index.html" -ForegroundColor Red
         return
     }
 
@@ -324,14 +327,22 @@ function Start-LocalConfigServer {
                 $contentType = "application/json; charset=utf-8"
                 $respBytes = [byte[]]@()
 
-                if ($method -eq "GET" -and ($path -eq "/" -or $path -eq "/config-web.html")) {
+                if ($method -eq "GET" -and ($path -eq "/" -or $path -eq "/index.html" -or $path -eq "/config-web.html")) {
                     $contentType = "text/html; charset=utf-8"
                     $respBytes = [System.IO.File]::ReadAllBytes($WebFile)
                 } elseif ($method -eq "GET" -and ($path -eq "/favicon.ico" -or $path -like "/assets/*")) {
                     $relPath = if ($path -eq "/favicon.ico") { "assets\favicon.ico" } else { ([System.Uri]::UnescapeDataString($path)).TrimStart('/').Replace('/', '\') }
-                    $assetFile = Join-Path $ScriptRoot $relPath
-                    if ((Test-Path $assetFile -PathType Leaf)) {
-                        $contentType = if ($assetFile.EndsWith(".ico")) { "image/x-icon" } else { "image/png" }
+                    $assetsRoot = [System.IO.Path]::GetFullPath((Join-Path $AppRoot "assets"))
+                    $assetFile = [System.IO.Path]::GetFullPath((Join-Path $AppRoot $relPath))
+                    if ($assetFile.StartsWith($assetsRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path $assetFile -PathType Leaf)) {
+                        $contentType = switch ([System.IO.Path]::GetExtension($assetFile).ToLowerInvariant()) {
+                            ".css"  { "text/css; charset=utf-8" }
+                            ".js"   { "application/javascript; charset=utf-8" }
+                            ".ico"  { "image/x-icon" }
+                            ".png"  { "image/png" }
+                            ".svg"  { "image/svg+xml" }
+                            default { "application/octet-stream" }
+                        }
                         $respBytes = [System.IO.File]::ReadAllBytes($assetFile)
                     } else {
                         $statusCode = "404 Not Found"
@@ -361,7 +372,7 @@ function Start-LocalConfigServer {
                         $parsed = $bodyText | ConvertFrom-Json
                         $formatted = $parsed | ConvertTo-Json -Depth 10
                         [System.IO.File]::WriteAllText($ConfigFile, $formatted + "`n", (New-Object System.Text.UTF8Encoding($false)))
-                        Write-Host "  [网页同步] 已保存 config.json" -ForegroundColor Green
+                        Write-Host "  [网页同步] 已保存 core\config.json" -ForegroundColor Green
                         $payload = @{ ok = $true } | ConvertTo-Json
                         $respBytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
                     } catch {
@@ -403,7 +414,7 @@ function Start-LocalConfigServer {
                         } elseif ($failedNames.Count -gt 0) {
                             "安装失败: " + ($failedNames -join "、") + "（请先关闭对应软件后重试）"
                         } else {
-                            "已保存 config.json（所选软件未在本机检测到安装路径）"
+                            "已保存 core\config.json（所选软件未在本机检测到安装路径）"
                         }
                         $payload = @{
                             ok      = $okFlag

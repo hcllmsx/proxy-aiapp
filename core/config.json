@@ -11,9 +11,9 @@
     "cidr": "198.18.0.0/15"
   },
   "timeout": {
-    "connect_ms": 5000,
-    "send_ms": 5000,
-    "recv_ms": 5000
+    "connect": 5000,
+    "send": 5000,
+    "recv": 5000
   },
   "proxy_rules": {
     "allowed_ports": [

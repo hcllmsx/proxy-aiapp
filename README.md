@@ -6,7 +6,7 @@
 
 - **一处构建，三端通用**：同时适配 Google Gemini 桌面端（原生 Chromium 非阻塞 `WSAEventSelect` 套接字）与 Antigravity / Antigravity IDE（Electron + Go Language Server）。
 - **FakeIP 域名透明还原**：接管 DNS 解析并阻断 Chromium 内置直连 UDP 53 查询，将目标域名以 `Domain` 类型完整封装进 SOCKS5 握手或 HTTP CONNECT 请求，无需开启 TUN/虚拟网卡即可正常分流。
-- **简单 / 高级双模式配置器**：内置可视化配置器 `config-web.html`，默认提供「简单模式」，连接本地服务后支持在网页内直接保存配置并一键安装到目标软件。
+- **简单 / 高级双模式配置器**：内置可视化配置器 `index.html`，默认提供「简单模式」，连接本地服务后支持在网页内直接保存配置并一键安装到目标软件。
 - **交互式安装工具**：通过 `install.bat` 自动检测本机已安装的 Gemini、Antigravity 与 Antigravity IDE 路径，支持一键全部安装、按软件自定义安装、卸载与检查更新。
 
 ## 快速使用
@@ -19,7 +19,7 @@
   - 自动启动本地直写服务并在浏览器打开配置页面（页面顶部显示「本地直写服务已连接」）。
   - 在默认的 **简单模式** 下选择代理预设（如 V2RayN `10808` / Clash `7890`）或填写自定义端口。
   - 点击右下角 **「保存并一键安装到勾选软件」**，即可直接将 `config.json` 与 `version.dll` 部署到对应软件目录；或点击 **「直接保存 config.json」** 仅更新当前目录配置文件。
-- **`[2] 一键安装全部`**：将当前目录的 `version.dll` 与 `config.json` 一键安装到本机所有已检测到的目标软件。
+- **`[2] 一键安装全部`**：将 `core/` 目录下的 `version.dll` 与 `config.json` 一键安装到本机所有已检测到的目标软件。
 - **`[3] 自定义安装`**：进入二级菜单，单独选择安装到 Google Gemini、Antigravity 或 Antigravity IDE（按 `0` 返回主菜单）。
 - **`[4] 卸载已安装代理`**：进入二级菜单，支持一键全部卸载或按软件单独卸载（按 `0` 返回主菜单）。
 - **`[5] 检查更新`**：检查 GitHub 仓库最新发布版本。
@@ -27,7 +27,7 @@
 
 ### 2. 手动部署（可选）
 
-如果不使用脚本，也可以直接将 `version.dll` 与配置好的 `config.json` 复制到目标软件可执行文件所在目录：
+如果不使用脚本，也可以直接将 `core/` 目录下的 `version.dll` 与配置好的 `config.json` 复制到目标软件可执行文件所在目录：
 - **Google Gemini**：`%LOCALAPPDATA%\Google\Gemini\app-<版本号>\`
 - **Antigravity**：`%LOCALAPPDATA%\Programs\Antigravity\`
 - **Antigravity IDE**：`%LOCALAPPDATA%\Programs\Antigravity IDE\`
