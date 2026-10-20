@@ -208,7 +208,7 @@ LRESULT CALLBACK MsgBoxCbtHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     HWND hNo = GetDlgItem(hWnd, IDNO);
     if (hYes && hNo) {
       SetWindowTextW(hNo, L"好的");
-      SetWindowTextW(hYes, L"代理日志目录");
+      SetWindowTextW(hYes, L"日志目录");
 
       RECT rcYes;
       GetWindowRect(hYes, &rcYes);
@@ -217,7 +217,7 @@ LRESULT CALLBACK MsgBoxCbtHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
       int btnWidth = rcYes.right - rcYes.left;
       int btnHeight = rcYes.bottom - rcYes.top;
-      int newYesWidth = 110;
+      int newYesWidth = 90;
       if (btnWidth < newYesWidth) {
         int diff = newYesWidth - btnWidth;
         MoveWindow(hYes, ptYes.x - diff, ptYes.y, newYesWidth, btnHeight, TRUE);

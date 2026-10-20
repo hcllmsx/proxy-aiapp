@@ -1,5 +1,5 @@
 {
-  "_version": "26.10.20",
+  "_version": "26.10.21",
   "log_level": "info",
   "proxy": {
     "host": "127.0.0.1",

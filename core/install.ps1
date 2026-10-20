@@ -12,7 +12,7 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.10.20"
+$CurrentVer = "26.10.21"
 
 function Get-DllSourcePath {
     $coreDll = Join-Path $CoreDir "version.dll"
@@ -211,33 +211,37 @@ function Invoke-CheckUpdate {
         "https://edgeone.gh-proxy.org/",
         ""
     )
+    $releasePage = "https://github.com/$GithubRepo/releases"
+    $oldProgress = $global:ProgressPreference
+    $global:ProgressPreference = "SilentlyContinue"
+
     Write-Host ""
     Write-Host "  [*] 当前版本: v$ver，正在检查更新 ($GithubRepo)..." -ForegroundColor Cyan
-    foreach ($prefix in $proxies) {
-        $reqUrl = "${prefix}${apiUrl}"
-        try {
-            $resp = Invoke-RestMethod -Uri $reqUrl -Method Get -TimeoutSec 8 -Headers @{ "User-Agent" = "ProxyAiApp-Updater" }
-            if ($resp -and $resp.tag_name) {
-                $latestVer = ($resp.tag_name -replace '^v', '').Trim()
-                $channelName = if ($prefix) { $prefix } else { "GitHub 直连" }
-                Write-Host "  [OK] 最新版本: v$latestVer (通道: $channelName)" -ForegroundColor Green
-                if ($latestVer -ne $ver) {
-                    $dlUrl = "https://github.com/$GithubRepo/releases/latest"
-                    if ($resp.assets -and $resp.assets.Count -gt 0) {
-                        $dlUrl = $resp.assets[0].browser_download_url
+    try {
+        foreach ($prefix in $proxies) {
+            $reqUrl = "${prefix}${apiUrl}"
+            try {
+                $resp = Invoke-RestMethod -Uri $reqUrl -Method Get -TimeoutSec 8 -Headers @{ "User-Agent" = "ProxyAiApp-Updater" }
+                if ($resp -and $resp.tag_name) {
+                    $latestVer = ($resp.tag_name -replace '^v', '').Trim()
+                    $channelName = if ($prefix) { $prefix } else { "GitHub 直连" }
+                    Write-Host "  [OK] 最新版本: v$latestVer (通道: $channelName)" -ForegroundColor Green
+                    if ($latestVer -ne $ver) {
+                        Write-Host "  [!] 发现新版本 v$latestVer，请前往 Releases 页面下载更新：" -ForegroundColor Yellow
+                        Write-Host "      ${prefix}${releasePage}" -ForegroundColor Cyan
+                    } else {
+                        Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
                     }
-                    $finalDlUrl = "${prefix}${dlUrl}"
-                    Write-Host "  [!] 发现新版本 v$latestVer，下载地址: $finalDlUrl" -ForegroundColor Yellow
-                } else {
-                    Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
+                    return
                 }
-                return
+            } catch {
+                continue
             }
-        } catch {
-            continue
         }
+        Write-Host "  [!] 暂未获取到发布版本信息（仓库尚未发布 Release 或网络受限）。" -ForegroundColor Yellow
+    } finally {
+        $global:ProgressPreference = $oldProgress
     }
-    Write-Host "  [!] 暂未获取到发布版本信息（仓库尚未发布 Release 或网络受限）。" -ForegroundColor Yellow
 }
 
 function Start-LocalConfigServer {

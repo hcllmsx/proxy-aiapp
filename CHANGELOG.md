@@ -1,6 +1,6 @@
 # 更新日志
 
-## v26.10.20
+## v26.10.21
 
 - 新增：全面支持 Google Gemini 桌面客户端（`Gemini.exe`）、`Antigravity.exe` 与 `Antigravity IDE.exe` 统一代理。
 - 修复：修复 Chromium `NetworkService` 非阻塞 `connect()` 同步返回 `0` 触发 `TCPSocketWin::DoConnect()` 断点崩溃（`0x80000003`）的问题。
