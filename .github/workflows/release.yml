@@ -52,7 +52,10 @@ jobs:
           # 3. 拼接网盘下载引导与二维码区域
           # GitHub Release 正文不支持本地相对路径，图片必须使用完整的绝对外链 URL（如 GitHub raw 地址）
           $repo = $env:REPO_NAME
-          $qrLines = @(
+          $bodyLines = @(
+            '### 更新内容',
+            '',
+            $notes,
             '',
             '---',
             '',
@@ -66,14 +69,14 @@ jobs:
             "  <img src=`"https://raw.githubusercontent.com/$repo/main/docs/media/baidu-proxy-aiapp.jpeg`" width=`"200`" alt=`"百度网盘下载二维码`" />",
             '</p>'
           )
-          $finalNotes = $notes + [Environment]::NewLine + ($qrLines -join [Environment]::NewLine)
+          $finalNotes = $bodyLines -join [Environment]::NewLine
           [System.IO.File]::WriteAllText((Join-Path $PWD "release_notes.txt"), $finalNotes, [System.Text.Encoding]::UTF8)
 
       - name: Create GitHub Release (Announcement Only)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: '${{ github.repository }} ${{ github.ref_name }}'
+          name: 'Proxy-AiApp v${{ steps.build_notes.outputs.version }}'
           body_path: release_notes.txt
           draft: false
           prerelease: false
