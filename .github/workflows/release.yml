@@ -1,0 +1,80 @@
+# ============================================================
+# 网盘分发 / 二维码引导发布工作流（免打包纯公告模式）
+# 适用场景：
+# - 软件安装包已上传至百度网盘、夸克网盘等第三方存储，不直接在 GitHub Release 挂载二进制文件
+# - GitHub Release 仅作为“版本更新公告”与“网盘二维码下载引导入口”
+# - 工作流无需任何依赖安装与编译打包步骤，runner 启动后秒级极速发布
+# ============================================================
+name: Release Announcement
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Extract Changelog and Build Announcement
+        id: build_notes
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          # 1. 获取版本号（优先读 VERSION 文件，若无则从 tag 名裁剪）
+          if (Test-Path "VERSION") {
+            $ver = (Get-Content -Raw -Encoding UTF8 "VERSION").Trim()
+          } else {
+            $ver = $env:REF_NAME.TrimStart('v')
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
+
+          # 2. 从 CHANGELOG.md 提取当前版本的更新说明
+          $notes = "Release v$ver"
+          if (Test-Path "CHANGELOG.md") {
+            $changelog = Get-Content -Raw -Encoding UTF8 "CHANGELOG.md"
+            $esc = [regex]::Escape($ver)
+            $pattern = '(?ms)^##\s+\[?v?' + $esc + '\]?.*?\r?\n(.*?)(?=^##\s+|\Z)'
+            if ($changelog -match $pattern) {
+              $extracted = $matches[1].Trim()
+              if ($extracted) { $notes = $extracted }
+            }
+          }
+
+          # 3. 拼接网盘下载引导与二维码区域
+          # GitHub Release 正文不支持本地相对路径，图片必须使用完整的绝对外链 URL（如 GitHub raw 地址）
+          $repo = $env:REPO_NAME
+          $qrLines = @(
+            '',
+            '---',
+            '',
+            '### 下载方式请扫描以下二维码',
+            '',
+            '> 抱歉以网盘形式发布。转存至网盘能为我带来一点微薄收益以维持项目更新，感谢理解。指着这个吃饭是不够的，但能买包泡面是可以的，多的用来充TOKEN啦。',
+            '',
+            '<p align="center">',
+            "  <img src=`"https://raw.githubusercontent.com/$repo/main/docs/media/quark-proxy-aiapp.jpeg`" width=`"200`" alt=`"夸克网盘下载二维码`" />",
+            '  &nbsp;&nbsp;&nbsp;&nbsp;',
+            "  <img src=`"https://raw.githubusercontent.com/$repo/main/docs/media/baidu-proxy-aiapp.jpeg`" width=`"200`" alt=`"百度网盘下载二维码`" />",
+            '</p>'
+          )
+          $finalNotes = $notes + [Environment]::NewLine + ($qrLines -join [Environment]::NewLine)
+          [System.IO.File]::WriteAllText((Join-Path $PWD "release_notes.txt"), $finalNotes, [System.Text.Encoding]::UTF8)
+
+      - name: Create GitHub Release (Announcement Only)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: '${{ github.repository }} ${{ github.ref_name }}'
+          body_path: release_notes.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: false
