@@ -1,11 +1,12 @@
 # ============================================================
-# 网盘分发 / 二维码引导发布工作流（免打包纯公告模式）
+# GitHub Release 直接发布工作流（自编译 + 产物直挂）
 # 适用场景：
-# - 软件安装包已上传至百度网盘、夸克网盘等第三方存储，不直接在 GitHub Release 挂载二进制文件
-# - GitHub Release 仅作为“版本更新公告”与“网盘二维码下载引导入口”
-# - 工作流无需任何依赖安装与编译打包步骤，runner 启动后秒级极速发布
+# - 在 GitHub Actions 上用 MSVC 自行编译 version.dll / dbghelp.dll
+# - 打包成完整发布包（install.bat + index.html + assets/ + core/）并以 ZIP 附件形式
+#   直接挂到 GitHub Release，用户从 Releases 页面直接下载
+# - 工作流不依赖任何第三方 action（VS 生成器由 CMake 自动定位 MSVC）
 # ============================================================
-name: Release Announcement
+name: Release
 
 on:
   push:
@@ -17,27 +18,137 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v7
 
-      - name: Extract Changelog and Build Announcement
-        id: build_notes
+      - name: Verify Version Matches Tag
+        id: verify
         shell: pwsh
         env:
           REF_NAME: ${{ github.ref_name }}
-          REPO_NAME: ${{ github.repository }}
         run: |
-          # 1. 获取版本号（优先读 VERSION 文件，若无则从 tag 名裁剪）
-          if (Test-Path "VERSION") {
-            $ver = (Get-Content -Raw -Encoding UTF8 "VERSION").Trim()
-          } else {
-            $ver = $env:REF_NAME.TrimStart('v')
+          # VERSION 文件是全项目唯一版本号来源，必须与 tag 一致，否则构建出的
+          # DLL 内嵌版本与 Release 标题会对不上。
+          $ver = (Get-Content -Raw -Encoding UTF8 "VERSION").Trim()
+          if ($ver -notmatch '^\d+(\.\d+)+$') {
+            throw "VERSION 内容不是合法版本号: $ver"
+          }
+          $tagVer = $env:REF_NAME.TrimStart('v')
+          if ($tagVer -ne $ver) {
+            throw "Tag ($env:REF_NAME) 与 VERSION ($ver) 不一致，请先更新 VERSION 文件再打 tag。"
           }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
 
-          # 2. 从 CHANGELOG.md 提取当前版本的更新说明
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          # 使用 Visual Studio 生成器，CMake 会自行定位 runner 上预装的
+          # VS 2022 + MSVC x64 工具链，无需 msvc-dev-cmd 之类的第三方 action。
+          # （msvc-dev-cmd@v1 内部仍是 node20，会触发 Node 运行时弃用警告，故不使用。）
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) {
+            # 兜底：runner 镜像若不再预装 VS 2022，改用默认生成器（-A x64 + Release）
+            Write-Host "VS 17 2022 生成器不可用，回退到默认生成器"
+            Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+            cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+            if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败" }
+          }
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "编译失败" }
+
+      - name: Assemble Release Package
+        id: pack
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = $env:VERSION
+
+          # 发布包布局与仓库根目录一致：
+          #   <root>/install.bat, index.html, assets/, LICENSE, README.md, VERSION
+          #   <root>/core/install.ps1, config.json, version.dll, dbghelp.dll, antigravity_proxy.dll
+          $stageRoot = Join-Path $PWD "_temp\release-pkg"
+          $stage = Join-Path $stageRoot "Proxy-AiApp"
+          if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
+          New-Item -ItemType Directory -Path (Join-Path $stage "core") -Force | Out-Null
+
+          Copy-Item "install.bat"  $stage -Force
+          Copy-Item "index.html"  $stage -Force
+          Copy-Item "LICENSE"     $stage -Force
+          Copy-Item "README.md"   $stage -Force
+          Copy-Item "VERSION"     $stage -Force
+          Copy-Item "assets"      $stage -Recurse -Force
+          Copy-Item "core\install.ps1"  (Join-Path $stage "core") -Force
+          Copy-Item "core\config.json" (Join-Path $stage "core") -Force
+
+          # 编译产物：缺失即失败，避免打出残缺发布包。
+          # 不写死 build\Release\，因为不同生成器的产物目录布局可能不同，
+          # 直接在 build 树下递归查找更稳妥。
+          foreach ($dll in @("version.dll", "dbghelp.dll", "antigravity_proxy.dll")) {
+            $found = Get-ChildItem -Path "build" -Filter $dll -Recurse -File -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+            if (-not $found) { throw "缺少编译产物: $dll（在 build 目录下未找到）" }
+            Copy-Item $found.FullName (Join-Path $stage "core") -Force
+          }
+
+          # 用 VERSION 里的版本号同步发布包内所有硬编码版本号
+          # install.ps1 必须保留 UTF-8 BOM（install.bat 会回退到 Windows PowerShell 5.1 读取它）
+          $ps1 = Join-Path $stage "core\install.ps1"
+          $t = [System.IO.File]::ReadAllText($ps1)
+          $t = [regex]::Replace($t, '\$CurrentVer\s*=\s*"[^"]*"', { param($m) '$CurrentVer = "' + $ver + '"' })
+          [System.IO.File]::WriteAllText($ps1, $t, (New-Object System.Text.UTF8Encoding($true)))
+
+          $cfg = Join-Path $stage "core\config.json"
+          $t = [System.IO.File]::ReadAllText($cfg)
+          $t = [regex]::Replace($t, '"_version"\s*:\s*"[^"]*"', { param($m) '"_version": "' + $ver + '"' })
+          [System.IO.File]::WriteAllText($cfg, $t, (New-Object System.Text.UTF8Encoding($false)))
+
+          $html = Join-Path $stage "index.html"
+          $t = [System.IO.File]::ReadAllText($html)
+          $t = [regex]::Replace($t, 'v\d+(?:\.\d+)+', { param($m) 'v' + $ver })
+          [System.IO.File]::WriteAllText($html, $t, (New-Object System.Text.UTF8Encoding($false)))
+
+          $js = Join-Path $stage "assets\js\config-web.js"
+          $t = [System.IO.File]::ReadAllText($js)
+          $t = [regex]::Replace($t, 'APP_VERSION\s*=\s*"[^"]*"', { param($m) 'APP_VERSION = "' + $ver + '"' })
+          [System.IO.File]::WriteAllText($js, $t, (New-Object System.Text.UTF8Encoding($false)))
+
+          # 打包为 ZIP（文件名保持 ASCII，避免部分下载工具乱码）
+          # 用 ZipFile 而非 Compress-Archive：后者在部分 PowerShell 版本下会写入
+          # 反斜杠路径分隔符，导致非 Windows 工具解压后目录结构错乱。
+          # 传入 $stage 并置 includeBaseDirectory=$true，使压缩包内根目录为 Proxy-AiApp/。
+          $zipName = "Proxy-AiApp_v{0}_x64.zip" -f $ver
+          $dist = Join-Path $PWD "dist"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          $zipPath = Join-Path $dist $zipName
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $stage, $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $true)
+
+          if (-not (Test-Path $zipPath)) { throw "ZIP 打包失败: $zipPath" }
+          $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "发布包已生成: $zipName ($size MB)"
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "zip=dist/$zipName"
+
+      - name: Build Release Notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = $env:VERSION
+
+          # 从 CHANGELOG.md 提取当前版本的更新说明
           $notes = "Release v$ver"
           if (Test-Path "CHANGELOG.md") {
             $changelog = Get-Content -Raw -Encoding UTF8 "CHANGELOG.md"
@@ -49,9 +160,6 @@ jobs:
             }
           }
 
-          # 3. 拼接网盘下载引导与二维码区域
-          # GitHub Release 正文不支持本地相对路径，图片必须使用完整的绝对外链 URL（如 GitHub raw 地址）
-          $repo = $env:REPO_NAME
           $bodyLines = @(
             '### 更新内容',
             '',
@@ -59,25 +167,26 @@ jobs:
             '',
             '---',
             '',
-            '### 下载方式请扫描以下二维码',
+            '### 下载方式',
             '',
-            '> 抱歉以网盘形式发布。转存至网盘能为我带来一点微薄收益以维持项目更新，感谢理解。指着这个吃饭是不够的，但能买包泡面是可以的，多的用来充TOKEN啦。',
-            '',
-            '<p align="center">',
-            "  <img src=`"https://raw.githubusercontent.com/$repo/main/docs/media/quark-proxy-aiapp.jpeg`" width=`"200`" alt=`"夸克网盘下载二维码`" />",
-            '  &nbsp;&nbsp;&nbsp;&nbsp;',
-            "  <img src=`"https://raw.githubusercontent.com/$repo/main/docs/media/baidu-proxy-aiapp.jpeg`" width=`"200`" alt=`"百度网盘下载二维码`" />",
-            '</p>'
+            ('1. 下载下方附件 `Proxy-AiApp_v{0}_x64.zip`' -f $ver),
+            '2. 解压后双击 `install.bat` 打开安装工具',
+            '3. 直接回车选择「打开网页配置」配置代理并一键安装；也可选「一键安装全部」自动部署到已检测到的 Gemini / Antigravity / Antigravity IDE'
           )
-          $finalNotes = $bodyLines -join [Environment]::NewLine
-          [System.IO.File]::WriteAllText((Join-Path $PWD "release_notes.txt"), $finalNotes, [System.Text.Encoding]::UTF8)
+          $final = $bodyLines -join [Environment]::NewLine
+          # 不写 BOM：带 BOM 时 GitHub 会把首行 "### 更新内容" 当普通文本，标题不渲染
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD "release_notes.txt"), $final,
+            (New-Object System.Text.UTF8Encoding($false)))
 
-      - name: Create GitHub Release (Announcement Only)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: 'Proxy-AiApp v${{ steps.build_notes.outputs.version }}'
+          name: 'Proxy-AiApp v${{ steps.verify.outputs.version }}'
           body_path: release_notes.txt
+          files: ${{ steps.pack.outputs.zip }}
           draft: false
           prerelease: false
           generate_release_notes: false
+          fail_on_unmatched_files: true
