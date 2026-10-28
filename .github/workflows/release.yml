@@ -75,7 +75,7 @@ jobs:
           #   <root>/install.bat, index.html, assets/, LICENSE, README.md, VERSION
           #   <root>/core/install.ps1, config.json, version.dll, dbghelp.dll, antigravity_proxy.dll
           $stageRoot = Join-Path $PWD "_temp\release-pkg"
-          $stage = Join-Path $stageRoot "Proxy-AiApp"
+          $stage = Join-Path $stageRoot "ProxyAiApp"
           if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
           New-Item -ItemType Directory -Path (Join-Path $stage "core") -Force | Out-Null
 
@@ -123,7 +123,7 @@ jobs:
           # 打包为 ZIP（文件名保持 ASCII，避免部分下载工具乱码）
           # 用 ZipFile 而非 Compress-Archive：后者在部分 PowerShell 版本下会写入
           # 反斜杠路径分隔符，导致非 Windows 工具解压后目录结构错乱。
-          # 传入 $stage 并置 includeBaseDirectory=$true，使压缩包内根目录为 Proxy-AiApp/。
+          # 传入 $stage 并置 includeBaseDirectory=$true，使压缩包内根目录为 ProxyAiApp/。
           $zipName = "Proxy-AiApp_v{0}_x64.zip" -f $ver
           $dist = Join-Path $PWD "dist"
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
