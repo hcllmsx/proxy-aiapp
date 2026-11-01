@@ -171,7 +171,7 @@ jobs:
             '',
             ('1. 下载下方附件 `Proxy-AiApp_v{0}_x64.zip`' -f $ver),
             '2. 解压后双击 `install.bat` 打开安装工具',
-            '3. 直接回车选择「打开网页配置」配置代理并一键安装；也可选「一键安装全部」自动部署到已检测到的 Gemini / Antigravity / Antigravity IDE'
+            '3. 直接回车选择「打开网页配置」配置代理并一键安装；也可选「一键安装全部」自动部署到已检测到的 Gemini / Antigravity / Antigravity IDE / Claude Desktop'
           )
           $final = $bodyLines -join [Environment]::NewLine
           # 不写 BOM：带 BOM 时 GitHub 会把首行 "### 更新内容" 当普通文本，标题不渲染

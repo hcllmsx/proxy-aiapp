@@ -312,6 +312,89 @@ function Uninstall-ProxyFromSlot {
     }
 }
 
+# CLI 进程里系统真 version.dll 往往已被加载，同名劫持取不到代理模块，
+# 因此改投 dbghelp.dll 转发壳 + 唯一名主体 antigravity_proxy.dll，并按主体所在目录补一份 config.json。
+$CliExeNames = @("agy.exe", "antigravity-cli.exe")
+
+function Get-CliProxySourcePaths {
+    $dllPath = Get-DllSourcePath
+    if (-not $dllPath) { return $null }
+    $sideDir = Split-Path -Parent $dllPath
+    $shim = Join-Path $sideDir "dbghelp.dll"
+    $body = Join-Path $sideDir "antigravity_proxy.dll"
+    if (-not (Test-Path $shim) -or -not (Test-Path $body)) { return $null }
+    return [PSCustomObject]@{ Shim = $shim; Body = $body }
+}
+
+# 只认两处：PATH 上的 CLI，以及已检测到的 Antigravity 安装目录内部
+function Find-CliProxyDirectories {
+    param([PSCustomObject[]]$Slots)
+    $dirs = @()
+    foreach ($exe in $CliExeNames) {
+        $cmd = Get-Command ($exe -replace '\.exe$', '') -ErrorAction SilentlyContinue
+        if ($cmd -and $cmd.Source) { $dirs += (Split-Path -Parent $cmd.Source) }
+    }
+    foreach ($slot in $Slots) {
+        if (-not $slot.Found -or $slot.Kind -ne "dir" -or $slot.Name -notmatch "Antigravity") { continue }
+        $dirs += @(Get-ChildItem $slot.Directory -Recurse -File -ErrorAction SilentlyContinue |
+                   Where-Object { $CliExeNames -contains $_.Name } |
+                   ForEach-Object { $_.DirectoryName })
+    }
+    return @($dirs | Sort-Object -Unique | Where-Object { $_ -and (Test-Path $_) })
+}
+
+# 仅当本轮确实安装/卸载了 Antigravity 相关目标时才处理 CLI
+function Get-CliRelevantSlots {
+    param([PSCustomObject[]]$Slots)
+    return @($Slots | Where-Object { $_.Name -match "Antigravity" })
+}
+
+function Install-CliProxy {
+    param([PSCustomObject[]]$Slots)
+    $relevant = Get-CliRelevantSlots -Slots $Slots
+    if ($relevant.Count -eq 0) { return }
+    $src = Get-CliProxySourcePaths
+    if (-not $src) {
+        Write-Host "  [!] 包内缺少 dbghelp.dll / antigravity_proxy.dll，跳过 Antigravity CLI 代理投放。" -ForegroundColor Yellow
+        return
+    }
+    foreach ($dir in (Find-CliProxyDirectories -Slots $relevant)) {
+        $body = Join-Path $dir "antigravity_proxy.dll"
+        $cfg = Join-Path $dir "config.json"
+        # config.json 是通用文件名：目录里既没有我们的代理主体、又已存在该文件时不动它
+        if (-not (Test-Path $body) -and (Test-Path $cfg)) {
+            Write-Host "  [!] $dir 已有 config.json 且非本工具投放，已跳过 CLI 代理。" -ForegroundColor Yellow
+            continue
+        }
+        try {
+            Copy-Item $src.Shim (Join-Path $dir "dbghelp.dll") -Force -ErrorAction Stop
+            Copy-Item $src.Body $body -Force -ErrorAction Stop
+            Copy-Item $ConfigFile $cfg -Force -ErrorAction Stop
+            Write-Host "  [OK] 已为 Antigravity CLI 投放代理: $dir" -ForegroundColor Green
+        } catch {
+            Write-Host "  [!] Antigravity CLI 代理投放失败（CLI 正在运行时请先退出）：$dir — $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+}
+
+function Uninstall-CliProxy {
+    param([PSCustomObject[]]$Slots)
+    $relevant = Get-CliRelevantSlots -Slots $Slots
+    if ($relevant.Count -eq 0) { return }
+    foreach ($dir in (Find-CliProxyDirectories -Slots $relevant)) {
+        if (-not (Test-Path (Join-Path $dir "antigravity_proxy.dll"))) { continue }
+        try {
+            foreach ($f in @("dbghelp.dll", "antigravity_proxy.dll", "config.json")) {
+                $p = Join-Path $dir $f
+                if (Test-Path $p) { Remove-Item $p -Force }
+            }
+            Write-Host "  [OK] 已清理 Antigravity CLI 代理: $dir" -ForegroundColor Green
+        } catch {
+            Write-Host "  [!] Antigravity CLI 代理清理失败：$dir — $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+}
+
 function Get-SlotStatusLabel {
     param([PSCustomObject]$Slot)
     if (-not $Slot.Found) { return "[未检测到]" }
@@ -341,7 +424,10 @@ function Invoke-CustomInstallSubMenu {
                 $num = [int]$sub
                 if ($num -ge 1 -and $num -le $maxOpt) {
                     Write-Host ""
-                    Install-ProxyToSlot $slots[$num - 1] | Out-Null
+                    $target = $slots[$num - 1]
+                    if (Install-ProxyToSlot $target) {
+                        Install-CliProxy -Slots @($target)
+                    }
                     Read-Host "`n  按回车继续..."
                     break
                 }
@@ -378,11 +464,14 @@ function Invoke-UninstallSubMenu {
                             Uninstall-ProxyFromSlot $s
                         }
                     }
+                    Uninstall-CliProxy -Slots $slots
                     Read-Host "`n  按回车继续..."
                     break
                 } elseif ($num -ge 2 -and $num -le $maxOpt) {
                     Write-Host ""
-                    Uninstall-ProxyFromSlot $slots[$num - 2]
+                    $target = $slots[$num - 2]
+                    Uninstall-ProxyFromSlot $target
+                    Uninstall-CliProxy -Slots @($target)
                     Read-Host "`n  按回车继续..."
                     break
                 }
@@ -623,17 +712,20 @@ function Start-LocalConfigServer {
                         }
                         $selected = @($req.targets)
                         $slots = Get-AppSlotStatus
+                        $installedSlots = @()
                         $installedNames = @()
                         $failedNames = @()
                         foreach ($s in $slots) {
                             if ($selected -contains $s.Key -and $s.Found) {
                                 if (Install-ProxyToSlot $s) {
+                                    $installedSlots += $s
                                     $installedNames += $s.Name
                                 } else {
                                     $failedNames += $s.Name
                                 }
                             }
                         }
+                        Install-CliProxy -Slots $installedSlots
                         $updatedSlots = Get-AppSlotStatus | ForEach-Object { Convert-SlotToApiObject $_ }
                         $okFlag = ($failedNames.Count -eq 0)
                         $msg = if ($installedNames.Count -gt 0 -and $failedNames.Count -eq 0) {
@@ -688,21 +780,25 @@ if ($Status) {
 if ($InstallAll) {
     $okCount = 0
     $failCount = 0
-    foreach ($s in (Get-AppSlotStatus)) {
+    $allSlots = @(Get-AppSlotStatus)
+    foreach ($s in $allSlots) {
         if (-not $s.Found) { continue }
         if (Install-ProxyToSlot $s) { $okCount++ } else { $failCount++ }
     }
+    Install-CliProxy -Slots $allSlots
     Write-Host ""
     Write-Host "  完成：成功 $okCount 项，失败 $failCount 项。" -ForegroundColor $(if ($failCount -eq 0) { "Green" } else { "Yellow" })
     exit $(if ($failCount -eq 0) { 0 } else { 1 })
 }
 
 if ($UninstallAll) {
-    foreach ($s in (Get-AppSlotStatus)) {
+    $allSlots = @(Get-AppSlotStatus)
+    foreach ($s in $allSlots) {
         if ($s.Found) {
             Uninstall-ProxyFromSlot $s
         }
     }
+    Uninstall-CliProxy -Slots $allSlots
     exit 0
 }
 
@@ -788,6 +884,8 @@ while ($true) {
             }
             if (-not $anyFound) {
                 Write-Host "  [!] 未检测到任何已安装的软件。" -ForegroundColor Yellow
+            } else {
+                Install-CliProxy -Slots $slots
             }
             Read-Host "`n按回车返回..."
         }

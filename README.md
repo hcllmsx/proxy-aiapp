@@ -8,6 +8,7 @@
 | Antigravity | `Antigravity.exe` | Electron + Go Language Server |
 | Antigravity IDE | `Antigravity IDE.exe` | Electron + Go Language Server |
 | Claude Desktop | `Claude.exe` | 微软商店版（Electron / Chromium 包应用） |
+| Antigravity CLI | `agy.exe`、`antigravity-cli.exe` | 终端命令版，安装时自动识别其所在目录并投放 |
 
 ## 项目特性
 
@@ -15,7 +16,7 @@
 - **FakeIP 域名透明还原**：接管 DNS 解析并阻断 Chromium 内置直连 UDP 53 查询，将目标域名以 `Domain` 类型完整封装进 SOCKS5 握手或 HTTP CONNECT 请求，无需开启 TUN/虚拟网卡即可正常分流。
 - **商店应用自动识别**：安装时动态定位 `%ProgramFiles%\WindowsApps` 下的商店包目录（包名带版本号且随更新变化），无需手工填写路径。
 - **简单 / 高级双模式配置器**：内置可视化配置器 `index.html`，默认提供「简单模式」，连接本地服务后支持在网页内直接保存配置并一键安装到目标软件。
-- **交互式安装工具**：通过 `install.bat` 自动检测本机已安装的各目标软件路径，支持一键全部安装、按软件自定义安装、卸载与检查更新；投放前自动关闭对应应用并在完成后重新拉起，应用更新后重新执行一次安装即等于重新注入。
+- **交互式安装工具**：通过 `install.bat` 自动检测本机已安装的各目标软件路径，支持一键全部安装、按软件自定义安装、卸载与检查更新；安装 Antigravity 时若本机装有 CLI 版，会一并投放到命令所在目录；投放前自动关闭对应应用并在完成后重新拉起，应用更新后重新执行一次安装即等于重新注入。
 
 ## 快速使用
 
