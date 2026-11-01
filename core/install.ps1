@@ -1,5 +1,8 @@
 ﻿param(
-    [switch]$Web
+    [switch]$Web,
+    [switch]$Status,
+    [switch]$InstallAll,
+    [switch]$UninstallAll
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +15,23 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.10.21"
+$CurrentVer = "26.11.1"
+
+# ---------------------------------------------------------------------------
+# 微软商店（MSIX / UWP）应用目标
+# 包目录名带版本号且随更新变化，运行时通过 Get-AppxPackage 动态发现，
+# 应用自更新后重新执行一次安装即等于重新注入。
+# ---------------------------------------------------------------------------
+$MsixApps = @(
+    [PSCustomObject]@{
+        Key          = "claude"
+        Name         = "Claude Desktop"
+        ExeName      = "Claude.exe"
+        PackageNames = @("Claude")
+        SubDir       = "app"
+        ProcessNames = @("Claude")
+    }
+)
 
 function Get-DllSourcePath {
     $coreDll = Join-Path $CoreDir "version.dll"
@@ -22,6 +41,107 @@ function Get-DllSourcePath {
     $rootDll = Join-Path $AppRoot "version.dll"
     if (Test-Path $rootDll) { return $rootDll }
     return $null
+}
+
+# 取商店包的应用目录（多版本并存时取版本最高者）
+function Get-MsixSlotDirectory {
+    param(
+        [string[]]$PackageNames,
+        [string]$SubDir
+    )
+    $best = $null
+    foreach ($name in $PackageNames) {
+        $pkgs = @()
+        try { $pkgs = @(Get-AppxPackage -Name $name -ErrorAction Stop) } catch { $pkgs = @() }
+        if ($pkgs.Count -eq 0) {
+            # 个别环境 -Name 精确匹配失败，退回全量列举后自行过滤
+            try { $pkgs = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -eq $name }) } catch { $pkgs = @() }
+        }
+        foreach ($p in $pkgs) {
+            if ([string]::IsNullOrWhiteSpace($p.InstallLocation)) { continue }
+            $dir = if ($SubDir) { Join-Path $p.InstallLocation $SubDir } else { $p.InstallLocation }
+            if (-not (Test-Path $dir)) { continue }
+            $ver = [version]"0.0"
+            if ($p.Version) { [void][version]::TryParse([string]$p.Version, [ref]$ver) }
+            if (-not $best -or $ver -gt $best.Version) {
+                $best = [PSCustomObject]@{ Directory = $dir; Version = $ver }
+            }
+        }
+    }
+    if ($best) { return $best.Directory }
+
+    # 兜底：Get-AppxPackage 不可用（如被裁剪的 Appx 模块）时直接扫描 WindowsApps
+    $root = Join-Path $env:SystemRoot "Program Files\WindowsApps"
+    foreach ($name in $PackageNames) {
+        $cands = @(Get-ChildItem -Path $root -Directory -Filter "$name*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+        foreach ($c in $cands) {
+            $dir = if ($SubDir) { Join-Path $c.FullName $SubDir } else { $c.FullName }
+            if (Test-Path $dir) { return $dir }
+        }
+    }
+    return $null
+}
+
+# 关闭该应用正在运行的进程：投放 version.dll 前必须释放文件占用。
+# 返回 $true 表示确实关掉了进程（调用方据此决定是否重新拉起）。
+function Stop-SlotProcesses {
+    param([PSCustomObject]$Slot)
+    $names = @($Slot.ProcessNames)
+    if ($names.Count -eq 0) { return $false }
+    $targets = @()
+    foreach ($n in $names) {
+        foreach ($p in @(Get-Process -Name $n -ErrorAction SilentlyContinue)) {
+            $src = ""
+            try { $src = [string]$p.Path } catch { $src = "" }
+            # 能取到路径时只处理本应用目录内的进程，避免误杀同名程序（例如 claude CLI、codex CLI）
+            if ($src -and $Slot.Directory) {
+                if (-not $src.StartsWith(($Slot.Directory + "\"), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            }
+            $targets += $p
+        }
+    }
+    if ($targets.Count -eq 0) { return $false }
+    Write-Host ("  [*] 关闭 {0}：{1} 个进程（先优雅关闭窗口，未保存的内容请先自行保存）" -f $Slot.Name, $targets.Count) -ForegroundColor DarkGray
+    foreach ($p in $targets) {
+        try { $null = $p.CloseMainWindow() } catch {}
+    }
+    Start-Sleep -Seconds 3
+    foreach ($p in $targets) {
+        try { if (-not $p.HasExited) { $null = $p.Kill() } } catch {}
+    }
+    Start-Sleep -Seconds 2
+    return $true
+}
+
+function Start-SlotApp {
+    param([PSCustomObject]$Slot)
+    $exe = Join-Path $Slot.Directory $Slot.ExeName
+    if (-not (Test-Path $exe)) {
+        Write-Host "  [!] 未找到可执行文件，已跳过自动启动：$exe" -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "  [*] 重新启动 $($Slot.Name)..." -ForegroundColor DarkGray
+    try {
+        $null = Start-Process -FilePath $exe -WorkingDirectory $Slot.Directory
+        Start-Sleep -Seconds 1
+        return $true
+    } catch {
+        Write-Host "  [!] 自动启动失败，请手动打开 $($Slot.Name)：$($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# 统一构造接口/界面所需的槽位摘要
+function Convert-SlotToApiObject {
+    param([PSCustomObject]$Slot)
+    return @{
+        key       = $Slot.Key
+        name      = $Slot.Name
+        kind      = $Slot.Kind
+        found     = $Slot.Found
+        directory = $Slot.Directory
+        installed = $Slot.Installed
+    }
 }
 
 function Get-AppSlotStatus {
@@ -48,30 +168,57 @@ function Get-AppSlotStatus {
 
     return @(
         [PSCustomObject]@{
-            Key       = "gemini"
-            Name      = "Google Gemini"
-            ExeName   = "Gemini.exe"
-            Found     = ($null -ne $geminiDir)
-            Directory = if ($geminiDir) { $geminiDir } else { "" }
-            Installed = if ($geminiDir) { Test-Path (Join-Path $geminiDir "version.dll") } else { $false }
+            Key          = "gemini"
+            Name         = "Google Gemini"
+            ExeName      = "Gemini.exe"
+            Kind         = "dir"
+            ProcessNames = @("Gemini")
+            Found        = ($null -ne $geminiDir)
+            Directory    = if ($geminiDir) { $geminiDir } else { "" }
+            Installed    = if ($geminiDir) { Test-Path (Join-Path $geminiDir "version.dll") } else { $false }
         },
         [PSCustomObject]@{
-            Key       = "antigravity"
-            Name      = "Antigravity"
-            ExeName   = "Antigravity.exe"
-            Found     = ($null -ne $agDir)
-            Directory = if ($agDir) { $agDir } else { "" }
-            Installed = if ($agDir) { Test-Path (Join-Path $agDir "version.dll") } else { $false }
+            Key          = "antigravity"
+            Name         = "Antigravity"
+            ExeName      = "Antigravity.exe"
+            Kind         = "dir"
+            ProcessNames = @("Antigravity")
+            Found        = ($null -ne $agDir)
+            Directory    = if ($agDir) { $agDir } else { "" }
+            Installed    = if ($agDir) { Test-Path (Join-Path $agDir "version.dll") } else { $false }
         },
         [PSCustomObject]@{
-            Key       = "antigravity_ide"
-            Name      = "Antigravity IDE"
-            ExeName   = "Antigravity IDE.exe"
-            Found     = ($null -ne $agIdeDir)
-            Directory = if ($agIdeDir) { $agIdeDir } else { "" }
-            Installed = if ($agIdeDir) { Test-Path (Join-Path $agIdeDir "version.dll") } else { $false }
+            Key          = "antigravity_ide"
+            Name         = "Antigravity IDE"
+            ExeName      = "Antigravity IDE.exe"
+            Kind         = "dir"
+            ProcessNames = @("Antigravity IDE")
+            Found        = ($null -ne $agIdeDir)
+            Directory    = if ($agIdeDir) { $agIdeDir } else { "" }
+            Installed    = if ($agIdeDir) { Test-Path (Join-Path $agIdeDir "version.dll") } else { $false }
         }
-    )
+    ) + (Get-MsixSlotStatus)
+}
+
+# 商店包槽位：目录随版本变化，只按包名动态定位，再判断是否已投放
+function Get-MsixSlotStatus {
+    $result = @()
+    foreach ($m in $MsixApps) {
+        $dir = Get-MsixSlotDirectory -PackageNames $m.PackageNames -SubDir $m.SubDir
+        $injected = if ($dir) { Test-Path (Join-Path $dir "version.dll") } else { $false }
+        $result += [PSCustomObject]@{
+            Key          = $m.Key
+            Name         = $m.Name
+            ExeName      = $m.ExeName
+            Kind         = "msix"
+            ProcessNames = $m.ProcessNames
+            PackageNames = $m.PackageNames
+            Found        = ($null -ne $dir)
+            Directory    = if ($dir) { $dir } else { "" }
+            Installed    = $injected
+        }
+    }
+    return $result
 }
 
 function Install-ProxyToSlot {
@@ -89,19 +236,50 @@ function Install-ProxyToSlot {
         Write-Host "  [!] 未找到 core\config.json 配置文件。" -ForegroundColor Red
         return $false
     }
+
+    # 投放前先关闭应用（会先尝试优雅关闭窗口），等 2s 让文件句柄与子进程全部释放
+    $wasRunning = Stop-SlotProcesses $Slot
+
+    $dstDll = Join-Path $Slot.Directory "version.dll"
+    $dstCfg = Join-Path $Slot.Directory "config.json"
+    $hadDll = Test-Path $dstDll
+    $hadCfg = Test-Path $dstCfg
     try {
-        Copy-Item $dllPath (Join-Path $Slot.Directory "version.dll") -Force
-        Copy-Item $ConfigFile (Join-Path $Slot.Directory "config.json") -Force
-        $marker = Join-Path $Slot.Directory "logs\load-notify-success.marker"
-        if (Test-Path $marker) {
-            Remove-Item $marker -Force -ErrorAction SilentlyContinue
-        }
-        Write-Host "  [OK] 已成功安装到 $($Slot.Name): $($Slot.Directory)" -ForegroundColor Green
-        return $true
+        Copy-Item $dllPath $dstDll -Force -ErrorAction Stop
+        Copy-Item $ConfigFile $dstCfg -Force -ErrorAction Stop
     } catch {
-        Write-Host "  [!] 安装到 $($Slot.Name) 失败（请先关闭正在运行的 $($Slot.ExeName) 后重试）：$($_.Exception.Message)" -ForegroundColor Red
+        $errMsg = $_.Exception.Message
+        # 只回滚本次新建的半截文件；原先已在的旧版本文件保持不动
+        foreach ($p in @($dstDll, $dstCfg)) {
+            $preexisting = ($p -eq $dstDll -and $hadDll) -or ($p -eq $dstCfg -and $hadCfg)
+            if (-not $preexisting -and (Test-Path $p)) {
+                try { Remove-Item $p -Force -ErrorAction Stop } catch {}
+            }
+        }
+        if ($Slot.Kind -eq "msix") {
+            # 部分商店包目录受系统写保护（提权与备份特权同样被拒），这类应用无法注入，直接说明原因
+            Write-Host "  [!] 安装到 $($Slot.Name) 失败：商店包目录禁止写入。$errMsg" -ForegroundColor Red
+            Write-Host "      该应用无法通过注入方式代理，已跳过。" -ForegroundColor Yellow
+            return $false
+        }
+        Write-Host "  [!] 安装到 $($Slot.Name) 失败（请先关闭正在运行的 $($Slot.ExeName) 后重试）：$errMsg" -ForegroundColor Red
         return $false
     }
+
+    # 清掉旧的「已提示过」标记，让新版本重新提示一次加载成功
+    $marker = Join-Path $Slot.Directory "logs\load-notify-success.marker"
+    if (Test-Path $marker) {
+        Remove-Item $marker -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "  [OK] 已成功安装到 $($Slot.Name): $($Slot.Directory)" -ForegroundColor Green
+
+    # 本来在跑的，装完直接重新拉起；商店应用更新后重复本动作即等于重新注入
+    if ($wasRunning) {
+        Start-SlotApp $Slot | Out-Null
+    } else {
+        Write-Host "      下次启动 $($Slot.Name) 时代理即生效。" -ForegroundColor DarkGray
+    }
+    return $true
 }
 
 function Uninstall-ProxyFromSlot {
@@ -110,15 +288,32 @@ function Uninstall-ProxyFromSlot {
         Write-Host "  [!] 本机未检测到 $($Slot.Name) 安装路径，已跳过。" -ForegroundColor Yellow
         return
     }
+    $wasRunning = Stop-SlotProcesses $Slot
     try {
         foreach ($f in @("version.dll", "dbghelp.dll", "config.json", "index.html", "config-web.html")) {
             $p = Join-Path $Slot.Directory $f
             if (Test-Path $p) { Remove-Item $p -Force }
         }
+        # 日志目录随安装动作产生，卸载时一并清干净，不在应用目录留残留
+        $logsDir = Join-Path $Slot.Directory "logs"
+        if (Test-Path $logsDir) {
+            Remove-Item $logsDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Write-Host "  [OK] 已从 $($Slot.Name) 卸载代理: $($Slot.Directory)" -ForegroundColor Green
     } catch {
         Write-Host "  [!] 从 $($Slot.Name) 卸载失败（请先关闭正在运行的 $($Slot.ExeName)）：$($_.Exception.Message)" -ForegroundColor Red
     }
+    if ($wasRunning) {
+        Start-SlotApp $Slot | Out-Null
+    }
+}
+
+function Get-SlotStatusLabel {
+    param([PSCustomObject]$Slot)
+    if (-not $Slot.Found) { return "[未检测到]" }
+    if (-not $Slot.Installed) { return "[未安装]" }
+    if ($Slot.Kind -eq "msix") { return "[已注入]" }
+    return "[已安装]"
 }
 
 function Invoke-CustomInstallSubMenu {
@@ -128,8 +323,7 @@ function Invoke-CustomInstallSubMenu {
         Write-Host "  --- 自定义安装 ---" -ForegroundColor Cyan
         for ($i = 0; $i -lt $slots.Count; $i++) {
             $s = $slots[$i]
-            $st = if (-not $s.Found) { "[未检测到]" } elseif ($s.Installed) { "[已安装]" } else { "[未安装]" }
-            Write-Host ("  [{0}] 安装到 {1,-16} {2}" -f ($i + 1), $s.Name, $st)
+            Write-Host ("  [{0}] 安装到 {1,-16} {2}" -f ($i + 1), $s.Name, (Get-SlotStatusLabel $s))
         }
         $maxOpt = $slots.Count
         Write-Host "  [0] 返回主菜单"
@@ -161,8 +355,7 @@ function Invoke-UninstallSubMenu {
         Write-Host "  [1] 全部卸载 (卸载所有已检测软件的代理)"
         for ($i = 0; $i -lt $slots.Count; $i++) {
             $s = $slots[$i]
-            $st = if (-not $s.Found) { "[未检测到]" } elseif ($s.Installed) { "[已安装]" } else { "[未安装]" }
-            Write-Host ("  [{0}] 卸载 {1,-18} {2}" -f ($i + 2), $s.Name, $st)
+            Write-Host ("  [{0}] 卸载 {1,-18} {2}" -f ($i + 2), $s.Name, (Get-SlotStatusLabel $s))
         }
         $maxOpt = $slots.Count + 1
         Write-Host "  [0] 返回主菜单"
@@ -356,15 +549,7 @@ function Start-LocalConfigServer {
                     if (Test-Path $ConfigFile) {
                         $cfgObj = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
                     }
-                    $slots = Get-AppSlotStatus | ForEach-Object {
-                        @{
-                            key       = $_.Key
-                            name      = $_.Name
-                            found     = $_.Found
-                            directory = $_.Directory
-                            installed = $_.Installed
-                        }
-                    }
+                    $slots = Get-AppSlotStatus | ForEach-Object { Convert-SlotToApiObject $_ }
                     $payload = @{
                         ok      = $true
                         config  = $cfgObj
@@ -403,20 +588,12 @@ function Start-LocalConfigServer {
                                 }
                             }
                         }
-                        $updatedSlots = Get-AppSlotStatus | ForEach-Object {
-                            @{
-                                key       = $_.Key
-                                name      = $_.Name
-                                found     = $_.Found
-                                directory = $_.Directory
-                                installed = $_.Installed
-                            }
-                        }
+                        $updatedSlots = Get-AppSlotStatus | ForEach-Object { Convert-SlotToApiObject $_ }
                         $okFlag = ($failedNames.Count -eq 0)
                         $msg = if ($installedNames.Count -gt 0 -and $failedNames.Count -eq 0) {
                             "已保存配置并成功安装到: " + ($installedNames -join "、")
                         } elseif ($failedNames.Count -gt 0) {
-                            "安装失败: " + ($failedNames -join "、") + "（请先关闭对应软件后重试）"
+                            "安装失败: " + ($failedNames -join "、") + "（请先关闭对应软件后重试，安装日志见终端输出）"
                         } else {
                             "已保存 core\config.json（所选软件未在本机检测到安装路径）"
                         }
@@ -452,6 +629,32 @@ function Start-LocalConfigServer {
     }
 }
 
+if ($Status) {
+    Get-AppSlotStatus | ForEach-Object { Convert-SlotToApiObject $_ } | ConvertTo-Json -Depth 4
+    exit 0
+}
+
+if ($InstallAll) {
+    $okCount = 0
+    $failCount = 0
+    foreach ($s in (Get-AppSlotStatus)) {
+        if (-not $s.Found) { continue }
+        if (Install-ProxyToSlot $s) { $okCount++ } else { $failCount++ }
+    }
+    Write-Host ""
+    Write-Host "  完成：成功 $okCount 项，失败 $failCount 项。" -ForegroundColor $(if ($failCount -eq 0) { "Green" } else { "Yellow" })
+    exit $(if ($failCount -eq 0) { 0 } else { 1 })
+}
+
+if ($UninstallAll) {
+    foreach ($s in (Get-AppSlotStatus)) {
+        if ($s.Found) {
+            Uninstall-ProxyFromSlot $s
+        }
+    }
+    exit 0
+}
+
 if ($Web) {
     Start-LocalConfigServer
     exit 0
@@ -476,15 +679,16 @@ while ($true) {
 
     foreach ($s in $slots) {
         if ($s.Found) {
-            $st = if ($s.Installed) { "[已安装]" } else { "[未安装]" }
+            $st = Get-SlotStatusLabel $s
             $col = if ($s.Installed) { "Green" } else { "White" }
-            Write-Host ("  - {0,-16} {1,-10} {2}" -f $s.Name, $st, $s.Directory) -ForegroundColor $col
+            Write-Host ("  - {0,-16} {1,-14} {2}" -f $s.Name, $st, $s.Directory) -ForegroundColor $col
         } else {
             Write-Host ("  - {0,-16} [未检测到]" -f $s.Name) -ForegroundColor DarkGray
         }
     }
 
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  安装前会自动关闭对应软件，投放完成后自动重新拉起。" -ForegroundColor DarkGray
     Write-Host "  [1] 打开网页配置 (默认回车)" -ForegroundColor Green
     Write-Host "  [2] 一键安装全部"
     Write-Host "  [3] 自定义安装"

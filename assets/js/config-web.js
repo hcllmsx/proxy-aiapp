@@ -1,4 +1,4 @@
-const APP_VERSION = "26.10.21";
+const APP_VERSION = "26.11.1";
 
 let currentFileHandle = null;
 let extraConfigState = null;
@@ -8,6 +8,8 @@ const DEFAULT_PROCESSES = [
   "Antigravity.exe",
   "Antigravity IDE.exe",
   "Gemini.exe",
+  "Claude.exe",
+  "cowork-svc.exe",
   "language_server_windows_x64.exe",
   "language_server.exe",
   "node.exe",
@@ -73,6 +75,11 @@ function onTargetCheckChange() {
   toggleProc(document.getElementById('chkAntigravity').checked, 'Antigravity.exe');
   toggleProc(document.getElementById('chkAntigravityIde').checked, 'Antigravity IDE.exe');
 
+  // 商店应用：主程序与它的常驻子进程成对开关
+  const claudeOn = document.getElementById('chkClaude').checked;
+  toggleProc(claudeOn, 'Claude.exe');
+  toggleProc(claudeOn, 'cowork-svc.exe');
+
   ['language_server_windows_x64.exe', 'language_server.exe', 'node.exe', 'agy.exe'].forEach(p => {
     const exists = Array.from(set).some(x => x.toLowerCase() === p.toLowerCase());
     if (!exists) set.add(p);
@@ -87,6 +94,7 @@ function syncCheckboxesFromProcessList(list) {
   document.getElementById('chkGemini').checked = lower.has('gemini.exe');
   document.getElementById('chkAntigravity').checked = lower.has('antigravity.exe');
   document.getElementById('chkAntigravityIde').checked = lower.has('antigravity ide.exe');
+  document.getElementById('chkClaude').checked = lower.has('claude.exe');
 }
 
 function buildConfigObject() {
@@ -227,7 +235,8 @@ function updateDetectedTargetsUI(targets) {
   const map = {
     gemini: { tag: 'tagGemini', sub: 'subGemini' },
     antigravity: { tag: 'tagAntigravity', sub: 'subAntigravity' },
-    antigravity_ide: { tag: 'tagAntigravityIde', sub: 'subAntigravityIde' }
+    antigravity_ide: { tag: 'tagAntigravityIde', sub: 'subAntigravityIde' },
+    claude: { tag: 'tagClaude', sub: 'subClaude' }
   };
   targets.forEach(t => {
     const ui = map[t.key];
@@ -377,6 +386,7 @@ async function saveAndInstall() {
   if (document.getElementById('chkGemini').checked) selectedKeys.push('gemini');
   if (document.getElementById('chkAntigravity').checked) selectedKeys.push('antigravity');
   if (document.getElementById('chkAntigravityIde').checked) selectedKeys.push('antigravity_ide');
+  if (document.getElementById('chkClaude').checked) selectedKeys.push('claude');
 
   try {
     const res = await fetch('/api/install', {

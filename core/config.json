@@ -1,5 +1,5 @@
 {
-  "_version": "26.10.21",
+  "_version": "26.11.1",
   "log_level": "info",
   "proxy": {
     "host": "127.0.0.1",
@@ -42,6 +42,8 @@
     "Antigravity.exe",
     "Antigravity IDE.exe",
     "Gemini.exe",
+    "Claude.exe",
+    "cowork-svc.exe",
     "language_server_windows_x64.exe",
     "language_server.exe",
     "node.exe",

@@ -308,7 +308,8 @@ void MaybeShowLoadNotifyAsync(bool success) {
   const std::wstring dllVersion = Utf8ToWideLocal(PROXY_AIAPP_VERSION);
   const std::wstring hint = onceMode ? L"\n\n按配置要求，本通知只会弹窗一次。" : L"";
   if (success) {
-    payload->message = L"Proxy-AiApp (v" + dllVersion + L") 加载成功。" + hint;
+    payload->message = L"Proxy-AiApp (v" + dllVersion +
+                       L") 加载成功。\n软件每次更新后，需要重新注入。" + hint;
   } else {
     payload->message =
         L"Proxy-AiApp (v" + dllVersion + L") 加载失败，请打开日志以排查。" + hint;

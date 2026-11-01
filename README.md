@@ -1,29 +1,32 @@
 # Proxy-AiApp
 
-面向 Windows 平台的 AI 客户端透明网络代理注入工具（`version.dll`），目前已原生支持 **Google Gemini Desktop (`Gemini.exe`)**、**Antigravity (`Antigravity.exe`)** 与 **Antigravity IDE (`Antigravity IDE.exe`)**，后续规划扩展支持更多桌面 AI 客户端。
+面向 Windows 平台的 AI 客户端透明网络代理注入工具（`version.dll`），目前已原生支持 **Google Gemini Desktop (`Gemini.exe`)**、**Antigravity (`Antigravity.exe`)**、**Antigravity IDE (`Antigravity IDE.exe`)**，以及微软商店版 **Claude Desktop (`Claude.exe`)**。
 
 ## 项目特性
 
-- **一处构建，三端通用**：同时适配 Google Gemini 桌面端（原生 Chromium 非阻塞 `WSAEventSelect` 套接字）与 Antigravity / Antigravity IDE（Electron + Go Language Server）。
+- **一处构建，多端通用**：同时适配 Google Gemini 桌面端（原生 Chromium 非阻塞 `WSAEventSelect` 套接字）、Antigravity / Antigravity IDE（Electron + Go Language Server）与商店版 Claude Desktop（Electron/Chromium 包应用）。
 - **FakeIP 域名透明还原**：接管 DNS 解析并阻断 Chromium 内置直连 UDP 53 查询，将目标域名以 `Domain` 类型完整封装进 SOCKS5 握手或 HTTP CONNECT 请求，无需开启 TUN/虚拟网卡即可正常分流。
+- **商店应用自动识别**：安装时动态定位 `%ProgramFiles%\WindowsApps` 下的商店包目录（包名带版本号且随更新变化），无需手工填写路径。
 - **简单 / 高级双模式配置器**：内置可视化配置器 `index.html`，默认提供「简单模式」，连接本地服务后支持在网页内直接保存配置并一键安装到目标软件。
-- **交互式安装工具**：通过 `install.bat` 自动检测本机已安装的 Gemini、Antigravity 与 Antigravity IDE 路径，支持一键全部安装、按软件自定义安装、卸载与检查更新。
+- **交互式安装工具**：通过 `install.bat` 自动检测本机已安装的各目标软件路径，支持一键全部安装、按软件自定义安装、卸载与检查更新；投放前自动关闭对应应用并在完成后重新拉起，应用更新后重新执行一次安装即等于重新注入。
 
 ## 快速使用
 
 ### 1. 使用 `install.bat` 一键配置与安装（推荐）
 
-解压发布包后，双击运行 `install.bat`，脚本会自动扫描本机已安装的 **Google Gemini**、**Antigravity** 和 **Antigravity IDE** 状态：
+解压发布包后，双击运行 `install.bat`，脚本会自动扫描本机已安装的 **Google Gemini**、**Antigravity**、**Antigravity IDE** 和 **Claude Desktop** 状态：
 
 - **`[1] 打开网页配置`（直接按回车默认执行）**：
   - 自动启动本地直写服务并在浏览器打开配置页面（页面顶部显示「本地直写服务已连接」）。
   - 在默认的 **简单模式** 下选择代理预设（如 V2RayN `10808` / Clash `7890`）或填写自定义端口。
   - 点击右下角 **「保存并一键安装到勾选软件」**，即可直接将 `config.json` 与 `version.dll` 部署到对应软件目录；或点击 **「直接保存 config.json」** 仅更新当前目录配置文件。
 - **`[2] 一键安装全部`**：将 `core/` 目录下的 `version.dll` 与 `config.json` 一键安装到本机所有已检测到的目标软件。
-- **`[3] 自定义安装`**：进入二级菜单，单独选择安装到 Google Gemini、Antigravity 或 Antigravity IDE（按 `0` 返回主菜单）。
-- **`[4] 卸载已安装代理`**：进入二级菜单，支持一键全部卸载或按软件单独卸载（按 `0` 返回主菜单）。
+- **`[3] 自定义安装`**：进入二级菜单，单独选择安装到某一款软件（按 `0` 返回主菜单）。
+- **`[4] 卸载已安装代理`**：进入二级菜单，支持一键全部卸载或按软件单独卸载，同时清理日志目录（按 `0` 返回主菜单）。
 - **`[5] 检查更新`**：检查 GitHub 仓库最新发布版本。
 - **`[0] 退出`**：关闭安装工具。
+
+> 安装过程会关闭对应软件窗口并写入文件，请先保存未提交的内容；商店应用（Claude Desktop）更新后代理会失效，重新运行一次安装即可。
 
 ### 2. 手动部署（可选）
 
@@ -31,6 +34,7 @@
 - **Google Gemini**：`%LOCALAPPDATA%\Google\Gemini\app-<版本号>\`
 - **Antigravity**：`%LOCALAPPDATA%\Programs\Antigravity\`
 - **Antigravity IDE**：`%LOCALAPPDATA%\Programs\Antigravity IDE\`
+- **Claude Desktop**：`%ProgramFiles%\WindowsApps\Claude_<版本号>_x64__pzs8sxrjxfjjc\app\`
 
 ## 致谢
 

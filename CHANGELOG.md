@@ -1,5 +1,13 @@
 # 更新日志
 
+## v26.11.1
+
+- 新增：支持微软商店版 Claude Desktop（`Claude.exe`），安装脚本按包名动态定位 `WindowsApps` 下的商店包目录，无需手工填写路径。
+- 新增：安装与卸载前自动关闭对应应用进程（先尝试优雅关闭窗口），投放完成后自动重新拉起；卸载同时清理日志目录。
+- 新增：加载成功弹窗提示「软件每次更新后，需要重新注入」。
+- 优化：配置页「生效目标软件」增加 Claude 卡片并展示商店包实际安装路径，界面图标改用应用真实图标。
+- 优化：`target_processes` 默认值补充 `Claude.exe`、`cowork-svc.exe`，商店应用的常驻子进程同样纳入注入范围。
+
 ## v26.10.21
 
 - 新增：全面支持 Google Gemini 桌面客户端（`Gemini.exe`）、`Antigravity.exe` 与 `Antigravity IDE.exe` 统一代理。
