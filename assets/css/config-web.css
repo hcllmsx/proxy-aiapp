@@ -415,3 +415,13 @@ body.mode-advanced .advanced-only {
   color: var(--accent);
   text-decoration: none;
 }
+
+.update-notice {
+  margin-top: 6px;
+  color: var(--warn);
+}
+
+.update-notice a {
+  color: inherit;
+  font-weight: 600;
+}

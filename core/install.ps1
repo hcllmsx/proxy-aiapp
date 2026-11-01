@@ -1,9 +1,13 @@
 ﻿param(
     [switch]$Web,
     [switch]$Status,
+    [switch]$CheckUpdate,
     [switch]$InstallAll,
     [switch]$UninstallAll
 )
+
+# Proxy-AiApp 安装工具 · 基于 GPL-3.0 协议开源
+# 作者：莫莫先生 (hcllmsx) · B站：https://space.bilibili.com/255947051
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -388,52 +392,94 @@ function Invoke-UninstallSubMenu {
     }
 }
 
-function Invoke-CheckUpdate {
-    $ver = $CurrentVer
+# 版本号以「.」切分后逐级按整数比较，禁止按字符串字典序比较
+function Test-CalVerFormat {
+    param([string]$Value)
+    return $Value -match '^\d+(\.\d+)+$'
+}
+
+function Compare-CalVer {
+    param([string]$Left, [string]$Right)
+    $a = @($Left -split '\.')
+    $b = @($Right -split '\.')
+    $count = [Math]::Max($a.Count, $b.Count)
+    for ($i = 0; $i -lt $count; $i++) {
+        $x = 0
+        $y = 0
+        if ($i -lt $a.Count) { [void][int]::TryParse($a[$i], [ref]$x) }
+        if ($i -lt $b.Count) { [void][int]::TryParse($b[$i], [ref]$y) }
+        if ($x -ne $y) { return $(if ($x -gt $y) { 1 } else { -1 }) }
+    }
+    return 0
+}
+
+# 本地版本优先取随包发布的 config.json，读取失败时退回脚本内置版本
+function Get-LocalVersion {
     if (Test-Path $ConfigFile) {
         try {
             $c = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($c._version) { $ver = ($c._version -replace '^v', '').Trim() }
+            $v = ($c._version -replace '^v', '').Trim()
+            if (Test-CalVerFormat $v) { return $v }
         } catch {}
     }
+    return $CurrentVer
+}
+
+# 以正式 Release 的 tag 为唯一版本依据；镜像仅用于取数，返回值一律为 GitHub 官方链接
+function Get-LatestRelease {
+    param([int]$TimeoutSec = 6)
+
     $apiUrl = "https://api.github.com/repos/$GithubRepo/releases/latest"
-    $proxies = @(
+    $sources = @(
         "https://gh-proxy.org/",
         "https://hk.gh-proxy.org/",
         "https://cdn.gh-proxy.org/",
         "https://edgeone.gh-proxy.org/",
         ""
     )
-    $releasePage = "https://github.com/$GithubRepo/releases"
     $oldProgress = $global:ProgressPreference
     $global:ProgressPreference = "SilentlyContinue"
-
-    Write-Host ""
-    Write-Host "  [*] 当前版本: v$ver，正在检查更新 ($GithubRepo)..." -ForegroundColor Cyan
     try {
-        foreach ($prefix in $proxies) {
-            $reqUrl = "${prefix}${apiUrl}"
+        foreach ($prefix in $sources) {
+            $resp = $null
             try {
-                $resp = Invoke-RestMethod -Uri $reqUrl -Method Get -TimeoutSec 8 -Headers @{ "User-Agent" = "ProxyAiApp-Updater" }
-                if ($resp -and $resp.tag_name) {
-                    $latestVer = ($resp.tag_name -replace '^v', '').Trim()
-                    $channelName = if ($prefix) { $prefix } else { "GitHub 直连" }
-                    Write-Host "  [OK] 最新版本: v$latestVer (通道: $channelName)" -ForegroundColor Green
-                    if ($latestVer -ne $ver) {
-                        Write-Host "  [!] 发现新版本 v$latestVer，请前往 Releases 页面下载更新：" -ForegroundColor Yellow
-                        Write-Host "      ${prefix}${releasePage}" -ForegroundColor Cyan
-                    } else {
-                        Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
-                    }
-                    return
-                }
+                $resp = Invoke-RestMethod -Uri "${prefix}${apiUrl}" -Method Get -TimeoutSec $TimeoutSec `
+                    -Headers @{ "User-Agent" = "ProxyAiApp-Updater" }
             } catch {
                 continue
             }
+            $tag = ""
+            if ($resp -and $resp.tag_name) { $tag = ("$($resp.tag_name)" -replace '^v', '').Trim() }
+            if (-not (Test-CalVerFormat $tag)) { continue }
+
+            $page = "https://github.com/$GithubRepo/releases"
+            if ($resp.html_url -and "$($resp.html_url)" -match "^https://github\.com/") {
+                $page = "$($resp.html_url)"
+            }
+            return [PSCustomObject]@{ Version = $tag; Page = $page }
         }
-        Write-Host "  [!] 暂未获取到发布版本信息（仓库尚未发布 Release 或网络受限）。" -ForegroundColor Yellow
+        return $null
     } finally {
         $global:ProgressPreference = $oldProgress
+    }
+}
+
+function Invoke-CheckUpdate {
+    $ver = Get-LocalVersion
+    Write-Host ""
+    Write-Host "  [*] 当前版本: v$ver，正在检查更新 ($GithubRepo)..." -ForegroundColor Cyan
+    $latest = Get-LatestRelease
+    if (-not $latest) {
+        Write-Host "  [!] 检查更新失败，请前往 Releases 页面查看最新版本：" -ForegroundColor Yellow
+        Write-Host "      https://github.com/$GithubRepo/releases" -ForegroundColor Cyan
+        return
+    }
+    Write-Host "  [OK] 最新已发布版本: v$($latest.Version)" -ForegroundColor Green
+    if ((Compare-CalVer $latest.Version $ver) -gt 0) {
+        Write-Host "  [!] 发现新版本 v$($latest.Version)，请前往 Releases 页面下载更新：" -ForegroundColor Yellow
+        Write-Host "      $($latest.Page)" -ForegroundColor Cyan
+    } else {
+        Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
     }
 }
 
@@ -629,6 +675,11 @@ function Start-LocalConfigServer {
     }
 }
 
+if ($CheckUpdate) {
+    Invoke-CheckUpdate
+    exit 0
+}
+
 if ($Status) {
     Get-AppSlotStatus | ForEach-Object { Convert-SlotToApiObject $_ } | ConvertTo-Json -Depth 4
     exit 0
@@ -660,6 +711,15 @@ if ($Web) {
     exit 0
 }
 
+# 打开脚本即检查一次更新：取数可走镜像，提示只给 GitHub 官方链接
+Write-Host ""
+Write-Host "  [*] 正在检查更新..." -ForegroundColor DarkGray
+$LatestRelease = Get-LatestRelease
+$UpdateHint = $null
+if ($LatestRelease -and ((Compare-CalVer $LatestRelease.Version (Get-LocalVersion)) -gt 0)) {
+    $UpdateHint = "发现新版本 v$($LatestRelease.Version)：$($LatestRelease.Page)"
+}
+
 while ($true) {
     Clear-Host
     $slots = Get-AppSlotStatus
@@ -673,8 +733,12 @@ while ($true) {
 
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "  Proxy-AiApp 安装工具 v$CurrentVer" -ForegroundColor Cyan
+    Write-Host "  作者：莫莫先生 · B站：https://space.bilibili.com/255947051" -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "  当前代理 : $proxyDisplay" -ForegroundColor Yellow
+    if ($UpdateHint) {
+        Write-Host "  [!] $UpdateHint" -ForegroundColor Yellow
+    }
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
 
     foreach ($s in $slots) {

@@ -273,6 +273,59 @@ async function probeLocalBackend() {
   } catch (_) {}
 }
 
+const GITHUB_REPO = "hcllmsx/proxy-aiapp";
+// 取数可走镜像，展示给用户的链接一律为 GitHub 官方地址
+const UPDATE_SOURCES = [
+  "https://gh-proxy.org/",
+  "https://hk.gh-proxy.org/",
+  ""
+];
+
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+async function checkAppUpdate() {
+  const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+  for (const prefix of UPDATE_SOURCES) {
+    let data = null;
+    try {
+      const res = await fetch(prefix + apiUrl, { cache: 'no-store' });
+      if (!res.ok) continue;
+      data = await res.json();
+    } catch (_) {
+      continue;
+    }
+    const tag = String((data && data.tag_name) || '').replace(/^v/, '').trim();
+    if (!/^\d+(\.\d+)+$/.test(tag)) continue;
+    if (compareVersions(tag, APP_VERSION) <= 0) return;
+
+    let url = String((data && data.html_url) || '');
+    if (!/^https:\/\/github\.com\//.test(url)) {
+      url = `https://github.com/${GITHUB_REPO}/releases`;
+    }
+    const box = document.getElementById('updateNotice');
+    if (!box) return;
+    box.textContent = `发现新版本 v${tag}：`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = '前往 Releases 下载';
+    box.appendChild(link);
+    box.style.display = 'block';
+    return;
+  }
+}
+
 async function openConfigFile() {
   if (hasLocalBackend) {
     try {
@@ -415,3 +468,4 @@ async function saveAndInstall() {
 document.getElementById('targetProcesses').value = DEFAULT_PROCESSES.join('\n');
 onFormChange();
 probeLocalBackend();
+checkAppUpdate();
