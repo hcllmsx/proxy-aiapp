@@ -1,6 +1,13 @@
 # Proxy-AiApp
 
-面向 Windows 平台的 AI 客户端透明网络代理注入工具（`version.dll`），目前已原生支持 **Google Gemini Desktop (`Gemini.exe`)**、**Antigravity (`Antigravity.exe`)**、**Antigravity IDE (`Antigravity IDE.exe`)**，以及微软商店版 **Claude Desktop (`Claude.exe`)**。
+面向 Windows 平台的 AI 客户端透明网络代理注入工具（`version.dll`），目前已原生支持以下客户端：
+
+| 客户端 | 进程名 | 形态 / 备注 |
+| --- | --- | --- |
+| Google Gemini Desktop | `Gemini.exe` | 原生 Chromium，非阻塞 `WSAEventSelect` 套接字 |
+| Antigravity | `Antigravity.exe` | Electron + Go Language Server |
+| Antigravity IDE | `Antigravity IDE.exe` | Electron + Go Language Server |
+| Claude Desktop | `Claude.exe` | 微软商店版（Electron / Chromium 包应用） |
 
 ## 项目特性
 
