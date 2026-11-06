@@ -666,7 +666,7 @@ function Get-LatestRelease {
             if ($resp.html_url -and "$($resp.html_url)" -match "^https://github\.com/") {
                 $page = "$($resp.html_url)"
             }
-            return [PSCustomObject]@{ Version = $tag; Page = $page }
+            return [PSCustomObject]@{ Version = $tag; Page = $page; Body = "$($resp.body)" }
         }
         return $null
     } finally {
@@ -690,6 +690,74 @@ function Invoke-CheckUpdate {
         Write-Host "      $($latest.Page)" -ForegroundColor Cyan
     } else {
         Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
+    }
+}
+
+# 从 Release 正文中挑出适合终端显示的条目。
+# 正文含网盘二维码等 HTML 区块，整段输出会挤满屏幕，因此只取 `- ` 条目、遇到 `---` 截止。
+function Get-ReleaseHighlights {
+    param([string]$Body, [int]$MaxItems = 6)
+
+    if ([string]::IsNullOrWhiteSpace($Body)) { return @() }
+    $items = @()
+    foreach ($line in ($Body -split "\r?\n")) {
+        $t = $line.Trim()
+        if ($t -match '^-{3,}$') { break }
+        if ($t -match '^[-*]\s+(.+)$') {
+            # 去掉 Markdown 加粗与行内代码标记（\x60 即反引号），终端不需要这些符号
+            $item = ($Matches[1] -replace '\*\*', '' -replace '\x60', '').Trim()
+            if ($item) { $items += $item }
+            if ($items.Count -ge $MaxItems) { break }
+        }
+    }
+    return $items
+}
+
+# 检测到新版本时先单独提示，按任意键打开下载页面后再进入主界面。
+# 主界面标题下只有一行黄字，很容易被后续输出刷走，故给一段不会被淹没的独立画面。
+function Show-UpdateNotice {
+    param([PSCustomObject]$Latest)
+
+    $localVer = Get-LocalVersion
+    $url = "https://github.com/$GithubRepo/releases/latest"
+
+    Clear-Host
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host "  [!] 发现新版本" -ForegroundColor Yellow
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host ("  当前版本：v{0}" -f $localVer) -ForegroundColor DarkGray
+    Write-Host ("  最新版本：v{0}" -f $Latest.Version) -ForegroundColor Green
+    Write-Host ""
+
+    $highlights = @(Get-ReleaseHighlights -Body $Latest.Body)
+    if ($highlights.Count -gt 0) {
+        Write-Host "  更新内容：" -ForegroundColor Cyan
+        foreach ($h in $highlights) {
+            Write-Host "    - $h"
+        }
+        Write-Host ""
+    }
+
+    Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  按任意键打开下载页面，随后自动进入安装工具..." -ForegroundColor Yellow
+    Write-Host "==========================================================" -ForegroundColor Yellow
+
+    try {
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    } catch {
+        # 个别宿主不支持 RawUI 按键读取，退回按回车
+        $null = Read-Host
+    }
+
+    try {
+        Start-Process $url
+    } catch {
+        Write-Host ""
+        Write-Host "  [!] 未能自动打开浏览器，请手动访问：" -ForegroundColor Yellow
+        Write-Host "      $url" -ForegroundColor Cyan
+        # 留出看清提示的时间，否则主界面刷新会立刻把它清掉
+        Start-Sleep -Seconds 3
     }
 }
 
@@ -953,6 +1021,8 @@ $LatestRelease = Get-LatestRelease
 $UpdateHint = $null
 if ($LatestRelease -and ((Compare-CalVer $LatestRelease.Version (Get-LocalVersion)) -gt 0)) {
     $UpdateHint = "发现新版本 v$($LatestRelease.Version)：$($LatestRelease.Page)"
+    # 先给出独立提示画面并引导到下载页，之后照常进入主界面
+    Show-UpdateNotice -Latest $LatestRelease
 }
 
 while ($true) {
