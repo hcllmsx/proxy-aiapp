@@ -3,7 +3,11 @@
     [switch]$Status,
     [switch]$CheckUpdate,
     [switch]$InstallAll,
-    [switch]$UninstallAll
+    [switch]$UninstallAll,
+    # 开发工具复用：只处理 Antigravity CLI 代理，不触碰任何目标应用
+    [switch]$CliInstall,
+    [switch]$CliUninstall,
+    [string[]]$CliSlotKeys = @()
 )
 
 # Proxy-AiApp 安装工具 · 基于 GPL-3.0 协议开源
@@ -19,7 +23,7 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.11.1"
+$CurrentVer = "26.11.6"
 
 # ---------------------------------------------------------------------------
 # 微软商店（MSIX / UWP）应用目标
@@ -117,6 +121,15 @@ function Stop-SlotProcesses {
     return $true
 }
 
+# 菜单里所有「按回车继续」统一走这里：先空行 + 分隔线，避免提示被
+# 刚刚重新拉起的应用日志挤在同一行，让用户误以为脚本卡死。
+function Wait-ForReturn {
+    param([string]$Message = "按回车返回...")
+    Write-Host ""
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor DarkGray
+    Read-Host "  $Message" | Out-Null
+}
+
 function Start-SlotApp {
     param([PSCustomObject]$Slot)
     $exe = Join-Path $Slot.Directory $Slot.ExeName
@@ -126,7 +139,35 @@ function Start-SlotApp {
     }
     Write-Host "  [*] 重新启动 $($Slot.Name)..." -ForegroundColor DarkGray
     try {
-        $null = Start-Process -FilePath $exe -WorkingDirectory $Slot.Directory
+        if ($Slot.Kind -eq "msix") {
+            # 商店包必须走 ShellExecute 才能正常激活，保持原有启动方式
+            $null = Start-Process -FilePath $exe -WorkingDirectory $Slot.Directory
+        } else {
+            # Electron 桌面版会继承控制台句柄，把 DevTools / AutoUpdater 等
+            # 自身日志 dumped 到安装终端，看起来像「卸载要联网」。
+            # 这里重定向到临时文件：菜单输出干净，日志仍可查。
+            $logDir = Join-Path $env:TEMP "ProxyAiApp"
+            if (-not (Test-Path $logDir)) {
+                $null = New-Item -ItemType Directory -Path $logDir -Force
+            }
+            # 每次启动用独立文件名，避免上个进程仍持有写句柄导致本次启动失败
+            Get-ChildItem -Path $logDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-3) } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            $tag = $Slot.Key -replace '[^a-zA-Z0-9_-]', '_'
+            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            $outLog = Join-Path $logDir "$tag-$stamp.out.log"
+            $errLog = Join-Path $logDir "$tag-$stamp.err.log"
+            try {
+                $null = Start-Process -FilePath $exe -WorkingDirectory $Slot.Directory `
+                            -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+                Write-Host "      应用日志已重定向到: $logDir" -ForegroundColor DarkGray
+            } catch {
+                # 个别启动器不接受输出重定向，退回原方式，保证应用仍能拉起
+                $null = Start-Process -FilePath $exe -WorkingDirectory $Slot.Directory
+                Write-Host "      [!] 日志重定向不可用，已按原方式启动（应用日志可能出现在终端）" -ForegroundColor Yellow
+            }
+        }
         Start-Sleep -Seconds 1
         return $true
     } catch {
@@ -148,17 +189,29 @@ function Convert-SlotToApiObject {
     }
 }
 
-function Get-AppSlotStatus {
-    $geminiDir = $null
+# Gemini 采用 Squirrel 式布局：升级后旧版本 app-* 目录常因注入文件被占用而残留。
+# 目录名必须按版本号解析比较，字符串排序会把 app-1.9.0 排在 app-1.10.0 前面。
+function Get-GeminiAppDirectories {
     $geminiRoot = Join-Path $env:LOCALAPPDATA "Google\Gemini"
-    if (Test-Path $geminiRoot) {
-        $latestApp = Get-ChildItem -Path $geminiRoot -Directory -Filter "app-*" -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            Select-Object -First 1
-        if ($latestApp -and (Test-Path (Join-Path $latestApp.FullName "Gemini.exe"))) {
-            $geminiDir = $latestApp.FullName
+    if (-not (Test-Path $geminiRoot)) { return @() }
+    $result = @()
+    foreach ($dir in @(Get-ChildItem -Path $geminiRoot -Directory -Filter "app-*" -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path (Join-Path $dir.FullName "Gemini.exe"))) { continue }
+        $verText = $dir.Name -replace '^app-', ''
+        $ver = [version]"0.0"
+        [void][version]::TryParse($verText, [ref]$ver)
+        $result += [PSCustomObject]@{
+            Directory = $dir.FullName
+            Version   = $ver
+            Name      = $dir.Name
         }
     }
+    return @($result | Sort-Object -Property @{ Expression = "Version"; Descending = $true }, @{ Expression = "Name"; Descending = $true })
+}
+
+function Get-AppSlotStatus {
+    $geminiDirs = @(Get-GeminiAppDirectories)
+    $geminiDir = if ($geminiDirs.Count -gt 0) { $geminiDirs[0].Directory } else { $null }
 
     $agDir = Join-Path $env:LOCALAPPDATA "Programs\Antigravity"
     if (-not (Test-Path (Join-Path $agDir "Antigravity.exe"))) {
@@ -286,6 +339,48 @@ function Install-ProxyToSlot {
     return $true
 }
 
+# 本工具投放过的文件清单；卸载只按此清理，绝不删除应用自身文件。
+$ProxyPayloadFiles = @("version.dll", "dbghelp.dll", "antigravity_proxy.dll", "config.json", "index.html", "config-web.html")
+
+function Remove-ProxyFiles {
+    param([string]$Directory)
+    foreach ($f in $ProxyPayloadFiles) {
+        $p = Join-Path $Directory $f
+        if (Test-Path $p) { Remove-Item $p -Force -ErrorAction Stop }
+    }
+    # 日志目录随安装动作产生，卸载时一并清干净，不在应用目录留残留
+    $logsDir = Join-Path $Directory "logs"
+    if (Test-Path $logsDir) {
+        Remove-Item $logsDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 判断某目录是否留有本工具的注入痕迹，避免误删干净的应用目录
+function Test-ProxyPayloadPresent {
+    param([string]$Directory)
+    foreach ($mark in @("version.dll", "dbghelp.dll", "antigravity_proxy.dll")) {
+        if (Test-Path (Join-Path $Directory $mark)) { return $true }
+    }
+    $proxyLogs = @(Get-ChildItem -Path (Join-Path $Directory "logs") -Filter "proxy-*.log" -File -ErrorAction SilentlyContinue)
+    return ($proxyLogs.Count -gt 0)
+}
+
+# Gemini 升级后旧版本 app-* 目录不会被 updater 清掉，里面的注入会一直留存。
+# 卸载主目录时顺带把残留目录一起清干净（此时进程已关闭，DLL 文件锁已释放）。
+function Remove-GeminiStaleProxy {
+    param([string]$PrimaryDirectory)
+    foreach ($item in @(Get-GeminiAppDirectories)) {
+        if ($item.Directory -ieq $PrimaryDirectory) { continue }
+        if (-not (Test-ProxyPayloadPresent -Directory $item.Directory)) { continue }
+        try {
+            Remove-ProxyFiles -Directory $item.Directory | Out-Null
+            Write-Host "  [OK] 已清理旧版本目录残留代理: $($item.Directory)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [!] 清理旧版本目录失败（请先关闭 Gemini）：$($item.Directory) — $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+
 function Uninstall-ProxyFromSlot {
     param([PSCustomObject]$Slot)
     if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Directory)) {
@@ -294,18 +389,14 @@ function Uninstall-ProxyFromSlot {
     }
     $wasRunning = Stop-SlotProcesses $Slot
     try {
-        foreach ($f in @("version.dll", "dbghelp.dll", "config.json", "index.html", "config-web.html")) {
-            $p = Join-Path $Slot.Directory $f
-            if (Test-Path $p) { Remove-Item $p -Force }
-        }
-        # 日志目录随安装动作产生，卸载时一并清干净，不在应用目录留残留
-        $logsDir = Join-Path $Slot.Directory "logs"
-        if (Test-Path $logsDir) {
-            Remove-Item $logsDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Remove-ProxyFiles -Directory $Slot.Directory | Out-Null
         Write-Host "  [OK] 已从 $($Slot.Name) 卸载代理: $($Slot.Directory)" -ForegroundColor Green
     } catch {
         Write-Host "  [!] 从 $($Slot.Name) 卸载失败（请先关闭正在运行的 $($Slot.ExeName)）：$($_.Exception.Message)" -ForegroundColor Red
+    }
+    # 进程已关闭，正好清理 Gemini 其它版本目录里的历史注入
+    if ($Slot.Key -eq "gemini") {
+        Remove-GeminiStaleProxy -PrimaryDirectory $Slot.Directory
     }
     if ($wasRunning) {
         Start-SlotApp $Slot | Out-Null
@@ -326,18 +417,48 @@ function Get-CliProxySourcePaths {
     return [PSCustomObject]@{ Shim = $shim; Body = $body }
 }
 
-# 只认两处：PATH 上的 CLI，以及已检测到的 Antigravity 安装目录内部
-function Find-CliProxyDirectories {
+# 从 PATH 与 Antigravity 安装目录里收集 CLI 相关目录。
+# -Filter 让文件系统层直接过滤文件名，避免把整个 Electron 目录（数万文件）
+# 全部枚举进内存再筛选，卸载时这一步曾明显拖慢菜单。
+function Get-CliSearchRoots {
     param([PSCustomObject[]]$Slots)
+    $roots = @()
+    foreach ($slot in $Slots) {
+        if ($slot.Found -and $slot.Kind -eq "dir" -and $slot.Name -match "Antigravity") {
+            $roots += $slot.Directory
+        }
+    }
+    return @($roots | Sort-Object -Unique)
+}
+
+function Get-CliPathDirectories {
     $dirs = @()
     foreach ($exe in $CliExeNames) {
         $cmd = Get-Command ($exe -replace '\.exe$', '') -ErrorAction SilentlyContinue
         if ($cmd -and $cmd.Source) { $dirs += (Split-Path -Parent $cmd.Source) }
     }
-    foreach ($slot in $Slots) {
-        if (-not $slot.Found -or $slot.Kind -ne "dir" -or $slot.Name -notmatch "Antigravity") { continue }
-        $dirs += @(Get-ChildItem $slot.Directory -Recurse -File -ErrorAction SilentlyContinue |
-                   Where-Object { $CliExeNames -contains $_.Name } |
+    return @($dirs | Sort-Object -Unique | Where-Object { $_ -and (Test-Path $_) })
+}
+
+# 安装：定位 CLI 可执行文件所在目录
+function Find-CliProxyDirectories {
+    param([PSCustomObject[]]$Slots)
+    $dirs = @(Get-CliPathDirectories)
+    foreach ($root in @(Get-CliSearchRoots -Slots $Slots)) {
+        foreach ($exe in $CliExeNames) {
+            $dirs += @(Get-ChildItem -Path $root -Recurse -File -Filter $exe -ErrorAction SilentlyContinue |
+                       ForEach-Object { $_.DirectoryName })
+        }
+    }
+    return @($dirs | Sort-Object -Unique | Where-Object { $_ -and (Test-Path $_) })
+}
+
+# 卸载：直接定位带代理主体的目录，一次扫描即可，不必先找 CLI 再逐个试探
+function Find-CliProxyPayloadDirectories {
+    param([PSCustomObject[]]$Slots)
+    $dirs = @(Get-CliPathDirectories)
+    foreach ($root in @(Get-CliSearchRoots -Slots $Slots)) {
+        $dirs += @(Get-ChildItem -Path $root -Recurse -File -Filter "antigravity_proxy.dll" -ErrorAction SilentlyContinue |
                    ForEach-Object { $_.DirectoryName })
     }
     return @($dirs | Sort-Object -Unique | Where-Object { $_ -and (Test-Path $_) })
@@ -381,7 +502,7 @@ function Uninstall-CliProxy {
     param([PSCustomObject[]]$Slots)
     $relevant = Get-CliRelevantSlots -Slots $Slots
     if ($relevant.Count -eq 0) { return }
-    foreach ($dir in (Find-CliProxyDirectories -Slots $relevant)) {
+    foreach ($dir in (Find-CliProxyPayloadDirectories -Slots $relevant)) {
         if (-not (Test-Path (Join-Path $dir "antigravity_proxy.dll"))) { continue }
         try {
             foreach ($f in @("dbghelp.dll", "antigravity_proxy.dll", "config.json")) {
@@ -428,7 +549,7 @@ function Invoke-CustomInstallSubMenu {
                     if (Install-ProxyToSlot $target) {
                         Install-CliProxy -Slots @($target)
                     }
-                    Read-Host "`n  按回车继续..."
+                    Wait-ForReturn "操作完成，按回车返回..."
                     break
                 }
             }
@@ -465,14 +586,14 @@ function Invoke-UninstallSubMenu {
                         }
                     }
                     Uninstall-CliProxy -Slots $slots
-                    Read-Host "`n  按回车继续..."
+                    Wait-ForReturn "操作完成，按回车返回..."
                     break
                 } elseif ($num -ge 2 -and $num -le $maxOpt) {
                     Write-Host ""
                     $target = $slots[$num - 2]
                     Uninstall-ProxyFromSlot $target
                     Uninstall-CliProxy -Slots @($target)
-                    Read-Host "`n  按回车继续..."
+                    Wait-ForReturn "操作完成，按回车返回..."
                     break
                 }
             }
@@ -777,6 +898,24 @@ if ($Status) {
     exit 0
 }
 
+# 只跑 CLI 代理的投放 / 清理，供开发工具调用，避免两边各维护一套定位规则。
+# -CliSlotKeys 与菜单里的单项操作保持一致：只把对应槽位交给 CLI 逻辑。
+if ($CliInstall -or $CliUninstall) {
+    if ($CliInstall -and $CliUninstall) {
+        throw "-CliInstall 与 -CliUninstall 不能同时使用。"
+    }
+    $cliSlots = @(Get-AppSlotStatus)
+    if ($CliSlotKeys.Count -gt 0) {
+        $cliSlots = @($cliSlots | Where-Object { $CliSlotKeys -contains $_.Key })
+    }
+    if ($CliInstall) {
+        Install-CliProxy -Slots $cliSlots
+    } else {
+        Uninstall-CliProxy -Slots $cliSlots
+    }
+    exit 0
+}
+
 if ($InstallAll) {
     $okCount = 0
     $failCount = 0
@@ -887,7 +1026,7 @@ while ($true) {
             } else {
                 Install-CliProxy -Slots $slots
             }
-            Read-Host "`n按回车返回..."
+            Wait-ForReturn "操作完成，按回车返回..."
         }
         "3" {
             Invoke-CustomInstallSubMenu
@@ -897,7 +1036,7 @@ while ($true) {
         }
         "5" {
             Invoke-CheckUpdate
-            Read-Host "`n按回车返回..."
+            Wait-ForReturn "操作完成，按回车返回..."
         }
         "0" {
             exit 0
