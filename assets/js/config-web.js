@@ -319,7 +319,7 @@ async function checkAppUpdate() {
     link.href = url;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = '前往 Releases 下载';
+    link.textContent = '前往 Releases 查看';
     box.appendChild(link);
     box.style.display = 'block';
     return;
