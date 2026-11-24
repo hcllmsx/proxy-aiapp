@@ -1,17 +1,4 @@
-# ============================================================
-# 网盘分发 / 二维码引导发布工作流（免构建纯公告模式）
-# 适用场景：
-# - 发布包上传至夸克 / 百度网盘，不直接在 GitHub Release 挂载二进制文件
-# - GitHub Release 仅作为「版本更新公告」与「网盘二维码下载引导入口」
-# - 工作流不装任何工具链、不编译、不打包，runner 启动后数秒内完成发布
-# - 发布包由本地开发菜单 [5] 编译并打包为 ZIP，手动上传网盘后再打 tag 发版
-#
-# 【重要】若要从本模式切回「GitHub 直接发布」（安装包挂载至 Release Assets）：
-#   1. 必须整体删除网盘文案（致歉引用块、二维码区块、"扫描以下二维码"小节标题）——
-#      读者并不知悉项目曾采用网盘分发，这些说明只会引发困惑。
-#   2. 不要书写"安装包已直接挂在本次 Release 的 Assets 中，不再经由网盘中转"这类迁移提示。
-#   3. 同时恢复真正的构建 / 打包步骤，并在 action-gh-release 中配置 `files:` 上传产物。
-# ============================================================
+# 由 hcllmsx-github-release skill 生成 · 发布方案：形态 #3（单公开仓 + 网盘交付 + Actions 构建 + 对象存储中转）
 name: Release
 
 on:
@@ -22,21 +9,29 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Verify Version Matches Tag
         id: verify
-        shell: pwsh
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          # VERSION 文件是全项目唯一版本号来源，必须与 tag 一致，否则
-          # Release 标题与客户端展示的版本号会对不上。
           $ver = (Get-Content -Raw -Encoding UTF8 "VERSION").Trim()
           if ($ver -notmatch '^\d+(\.\d+)+$') {
             throw "VERSION 内容不是合法版本号: $ver"
@@ -48,7 +43,6 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
 
       - name: Build Release Notes
-        shell: pwsh
         env:
           VERSION: ${{ steps.verify.outputs.version }}
           REPO_NAME: ${{ github.repository }}
@@ -56,7 +50,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ver = $env:VERSION
 
-          # 从 CHANGELOG.md 提取当前版本的更新说明；缺失时退化为通用说明
           $notes = "Release v$ver"
           if (Test-Path "CHANGELOG.md") {
             $changelog = Get-Content -Raw -Encoding UTF8 "CHANGELOG.md"
@@ -67,17 +60,8 @@ jobs:
               if ($extracted) { $notes = $extracted }
             }
           }
-          # CHANGELOG 为 CRLF，拼接用的是 LF，统一换行避免正文出现混合行尾
           $notes = $notes -replace "`r`n", "`n"
 
-          # 二维码图片必须用完整绝对外链：Release 正文不支持仓库内相对路径。
-          # 若 raw 地址在部分网络下不可达，可整体换成 jsDelivr 直链：
-          #   https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/docs/media/<file>
-          # PowerShell here-string 的结束符若位于行首（列 0）会破坏 YAML 缩进，
-          # 故统一采用数组拼接。
-          #
-          # 结构约定：'### 更新内容' 与独占一行的 '---' 之间只放日志正文，
-          # 客户端据此解析展示内容，调整文案时不得破坏该结构。
           $repo = $env:REPO_NAME
           $base = "https://raw.githubusercontent.com/$repo/main/docs/media"
           $bodyLines = @(
@@ -100,19 +84,104 @@ jobs:
             '扫码后转存并下载压缩包，解压后双击 `install.bat` 打开安装工具。'
           )
           $final = $bodyLines -join "`n"
-          # 不写 BOM：带 BOM 时 GitHub 会把首行 "### 更新内容" 当普通文本，标题不渲染
           [System.IO.File]::WriteAllText(
             (Join-Path $PWD "release_notes.txt"), $final,
             (New-Object System.Text.UTF8Encoding($false)))
+
+      - name: Configure CMake (x64 Release)
+        run: cmake -S . -B _temp/build-x64 -A x64 -DBUILD_TESTS=ON
+
+      - name: Build Release
+        run: cmake --build _temp/build-x64 --config Release --parallel
+
+      - name: Run Unit Tests
+        run: ctest --test-dir _temp/build-x64 -C Release --output-on-failure
+
+      - name: Package Release ZIP
+        env:
+          RELEASE_VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver   = $env:RELEASE_VERSION
+          $build = Join-Path $PWD "_temp/build-x64/Release"
+          $stage = Join-Path $PWD "_temp/package_stage"
+          $inner = Join-Path $stage "ProxyAiApp"
+          $core  = Join-Path $inner "core"
+
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $core -Force | Out-Null
+
+          foreach ($dll in @("version.dll", "dbghelp.dll", "antigravity_proxy.dll")) {
+            $src = Join-Path $build $dll
+            if (-not (Test-Path $src)) { throw "缺少编译产物：$src" }
+            Copy-Item $src (Join-Path $core $dll) -Force
+          }
+          foreach ($f in @("config.json", "install.ps1")) {
+            $src = Join-Path $PWD "core/$f"
+            if (-not (Test-Path $src)) { throw "缺少文件：$src" }
+            Copy-Item $src (Join-Path $core $f) -Force
+          }
+          foreach ($f in @("index.html", "install.bat", "README.md", "LICENSE", "VERSION")) {
+            $src = Join-Path $PWD $f
+            if (Test-Path $src) { Copy-Item $src (Join-Path $inner $f) -Force }
+          }
+          $assetsSrc = Join-Path $PWD "assets"
+          if (Test-Path $assetsSrc) { Copy-Item $assetsSrc (Join-Path $inner "assets") -Recurse -Force }
+
+          $out = Join-Path $PWD "out_put"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $zip = Join-Path $out "Proxy-AiApp-v$ver-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $stage, $zip,
+            [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          if (-not (Test-Path $zip)) { throw "打包失败：$zip" }
+          $size = [math]::Round((Get-Item $zip).Length / 1MB, 2)
+          Write-Host "打包完成：$zip ($size MB)"
+
+      - name: Install rclone
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $env:RUNNER_TEMP "rclone.zip"
+          $dir = Join-Path $env:RUNNER_TEMP "rclone"
+          Invoke-WebRequest -Uri "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $exe = Get-ChildItem -Path $dir -Recurse -Filter "rclone.exe" | Select-Object -First 1
+          if (-not $exe) { throw "解压后未找到 rclone.exe" }
+          Add-Content -Path $env:GITHUB_PATH -Value $exe.DirectoryName
+          & $exe.FullName version
+
+      - name: Publish build to object storage (transfer staging)
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+          RCLONE_TARGET: ${{ secrets.RCLONE_TARGET }}
+          RELEASE_VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:RCLONE_CONF_B64) { throw "缺少 Secret：RCLONE_CONF_B64" }
+          if (-not $env:RCLONE_TARGET) { throw "缺少 Secret：RCLONE_TARGET" }
+          $conf = Join-Path $env:RUNNER_TEMP "rclone.conf"
+          [System.IO.File]::WriteAllBytes($conf, [System.Convert]::FromBase64String($env:RCLONE_CONF_B64))
+
+          $name   = "Proxy-AiApp-v$($env:RELEASE_VERSION)-win-x64.zip"
+          $src    = Join-Path $PWD "out_put/$name"
+          if (-not (Test-Path $src)) { throw "找不到打包产物：$src" }
+          $target = $env:RCLONE_TARGET.TrimEnd('/') + "/" + $name
+
+          & rclone --config $conf copyto $src $target
+          if ($LASTEXITCODE -ne 0) { throw "rclone copyto 上传失败" }
+          & rclone --config $conf lsl $target
+          if ($LASTEXITCODE -ne 0) { throw "rclone lsl 校验落地失败" }
+          Write-Host "已上传中转：$target"
 
       - name: Create GitHub Release (Announcement Only)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          # 标题规范：<项目名> v<版本号>，不带 owner/ 前缀
           name: 'Proxy-AiApp v${{ steps.verify.outputs.version }}'
           body_path: release_notes.txt
           draft: false
           prerelease: false
           generate_release_notes: false
-          # 纯公告模式：不配置 files:，发布页不挂任何二进制附件
