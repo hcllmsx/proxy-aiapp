@@ -23,7 +23,7 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.11.6"
+$CurrentVer = "26.11.24"
 
 # ---------------------------------------------------------------------------
 # 微软商店（MSIX / UWP）应用目标
@@ -524,6 +524,15 @@ function Get-SlotStatusLabel {
     return "[已安装]"
 }
 
+# 各菜单共用的状态配色：未检测到灰、未安装黄、已安装/已注入绿。
+# 未安装用黄色高亮，方便一眼看出还有哪些软件可以注入代理。
+function Get-SlotStatusColor {
+    param([PSCustomObject]$Slot)
+    if (-not $Slot.Found) { return "DarkGray" }
+    if (-not $Slot.Installed) { return "Yellow" }
+    return "Green"
+}
+
 function Invoke-CustomInstallSubMenu {
     while ($true) {
         $slots = Get-AppSlotStatus
@@ -531,7 +540,7 @@ function Invoke-CustomInstallSubMenu {
         Write-Host "  --- 自定义安装 ---" -ForegroundColor Cyan
         for ($i = 0; $i -lt $slots.Count; $i++) {
             $s = $slots[$i]
-            Write-Host ("  [{0}] 安装到 {1,-16} {2}" -f ($i + 1), $s.Name, (Get-SlotStatusLabel $s))
+            Write-Host ("  [{0}] 安装到 {1,-16} {2}" -f ($i + 1), $s.Name, (Get-SlotStatusLabel $s)) -ForegroundColor (Get-SlotStatusColor $s)
         }
         $maxOpt = $slots.Count
         Write-Host "  [0] 返回主菜单"
@@ -566,7 +575,7 @@ function Invoke-UninstallSubMenu {
         Write-Host "  [1] 全部卸载 (卸载所有已检测软件的代理)"
         for ($i = 0; $i -lt $slots.Count; $i++) {
             $s = $slots[$i]
-            Write-Host ("  [{0}] 卸载 {1,-18} {2}" -f ($i + 2), $s.Name, (Get-SlotStatusLabel $s))
+            Write-Host ("  [{0}] 卸载 {1,-18} {2}" -f ($i + 2), $s.Name, (Get-SlotStatusLabel $s)) -ForegroundColor (Get-SlotStatusColor $s)
         }
         $maxOpt = $slots.Count + 1
         Write-Host "  [0] 返回主菜单"
@@ -1049,8 +1058,7 @@ while ($true) {
     foreach ($s in $slots) {
         if ($s.Found) {
             $st = Get-SlotStatusLabel $s
-            $col = if ($s.Installed) { "Green" } else { "White" }
-            Write-Host ("  - {0,-16} {1,-14} {2}" -f $s.Name, $st, $s.Directory) -ForegroundColor $col
+            Write-Host ("  - {0,-16} {1,-14} {2}" -f $s.Name, $st, $s.Directory) -ForegroundColor (Get-SlotStatusColor $s)
         } else {
             Write-Host ("  - {0,-16} [未检测到]" -f $s.Name) -ForegroundColor DarkGray
         }

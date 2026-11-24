@@ -1,4 +1,4 @@
-const APP_VERSION = "26.11.6";
+const APP_VERSION = "26.11.24";
 
 let currentFileHandle = null;
 let extraConfigState = null;
