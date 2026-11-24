@@ -77,8 +77,6 @@ jobs:
             '',
             '<p align="center">',
             "  <img src=`"$base/quark-proxy-aiapp.jpeg`" width=`"200`" alt=`"夸克网盘下载二维码`" />",
-            '  &nbsp;&nbsp;&nbsp;&nbsp;',
-            "  <img src=`"$base/baidu-proxy-aiapp.jpeg`" width=`"200`" alt=`"百度网盘下载二维码`" />",
             '</p>',
             '',
             '扫码后转存并下载压缩包，解压后双击 `install.bat` 打开安装工具。'
