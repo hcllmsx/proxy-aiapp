@@ -1,5 +1,30 @@
 # Proxy-AiApp
 
+## ⚠️ 我可能发现了一些比较离谱的问题
+
+### 1. 请下载发行版使用，不要直接克隆本仓库
+
+本仓库**不包含编译好的 `version.dll` 等二进制文件**，直接克隆后运行 `install.bat` 是用不了的。如果你是新手小白，只想开箱即用：
+
+1. 扫描下方二维码，下载发布版压缩包（免编译、开箱即用）；
+2. 解压到任意目录；
+3. 双击运行 `install.bat`，按菜单提示操作即可。
+
+> 发布包内含编译好的 `version.dll`、`install.bat`、配置器等全部文件，解压即可使用。
+
+<p align="center">
+  <img src="docs/media/quark-proxy-aiapp.jpeg" alt="夸克网盘下载二维码" width="200">
+</p>
+<p align="center"><b>夸克网盘扫码下载</b></p>
+
+### 2. 本项目不是「梯子」，不能翻墙
+
+- **Proxy-AiApp 只是一个「代理注入器」**：它的作用是把 AI 客户端（Google Gemini、Antigravity、Claude Desktop 等）的网络请求，转发到你**本机已经在运行的代理软件**（如 V2RayN、Clash 的 SOCKS5 / HTTP 端口）上。
+- **你必须自备可用的代理软件并保持运行**，本项目本身不提供任何代理节点或翻墙能力。
+- 没有梯子的情况下，装上本项目也**无法直连** Google Gemini、Claude 等需要特殊网络环境的服务。
+
+---
+
 面向 Windows 平台的 AI 客户端透明网络代理注入工具（`version.dll`），目前已原生支持以下客户端：
 
 | 客户端 | 进程名 | 形态 / 备注 |
