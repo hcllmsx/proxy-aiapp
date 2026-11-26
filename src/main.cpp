@@ -367,19 +367,17 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
       break;
     }
 
-    // 诊断构建：只旁路 Antigravity 宿主 Chromium
-    // NetworkService，用于区分宿主进程角色对本地 TLS 的影响。 Gemini.exe
-    // 的全部外网流量均在 Chromium NetworkService 中发起，保持全量网络 Hook。
-    const bool bypassNetworkService =
-        Hooks::IsAntigravityHostProcessName(processName) &&
-        IsChromiumNetworkServiceProcess();
-    const bool enableNetworkHooks = !bypassNetworkService;
+    // 所有支持客户端（包括 Antigravity / Antigravity IDE 内置浏览器的 Chromium
+    // NetworkService）均启用全量网络 Hook；本地回环连接由 Hooks 层的
+    // IsLoopbackSockaddr / g_localBypassSockets 早期旁路保护，避免影响本地 TLS。
+    const bool isNetworkService = IsChromiumNetworkServiceProcess();
+    const bool enableNetworkHooks = true;
     Core::Logger::Info(
-        enableNetworkHooks
+        isNetworkService
             ? "当前进程 " + processName +
-                  " 使用全量模式：安装网络与进程创建 Hook"
+                  " (Chromium NetworkService) 使用全量模式：安装网络与进程创建 Hook"
             : "当前进程 " + processName +
-                  " 使用 NetworkService 旁路模式：仅安装进程创建 Hook");
+                  " 使用全量模式：安装网络与进程创建 Hook");
     Hooks::Install(enableNetworkHooks);
     if (!IsChromiumSubprocess()) {
       MaybeShowLoadNotifyAsync(true);

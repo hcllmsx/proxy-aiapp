@@ -23,7 +23,7 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.11.24"
+$CurrentVer = "26.11.26"
 
 # ---------------------------------------------------------------------------
 # 微软商店（MSIX / UWP）应用目标
@@ -533,37 +533,27 @@ function Get-SlotStatusColor {
     return "Green"
 }
 
-function Invoke-CustomInstallSubMenu {
-    while ($true) {
-        $slots = Get-AppSlotStatus
-        Write-Host ""
-        Write-Host "  --- 自定义安装 ---" -ForegroundColor Cyan
-        for ($i = 0; $i -lt $slots.Count; $i++) {
-            $s = $slots[$i]
-            Write-Host ("  [{0}] 安装到 {1,-16} {2}" -f ($i + 1), $s.Name, (Get-SlotStatusLabel $s)) -ForegroundColor (Get-SlotStatusColor $s)
+function Invoke-InstallUninstalledSlots {
+    param([PSCustomObject[]]$Slots)
+    Write-Host ""
+    $foundSlots = @($Slots | Where-Object { $_.Found })
+    if ($foundSlots.Count -eq 0) {
+        Write-Host "  [!] 未检测到任何已安装的软件。" -ForegroundColor Yellow
+        return
+    }
+    $uninstalled = @($foundSlots | Where-Object { -not $_.Installed })
+    if ($uninstalled.Count -eq 0) {
+        Write-Host "  [OK] 所有已检测到的软件均已安装代理，无需重复安装。" -ForegroundColor Green
+        return
+    }
+    $installedSlots = @()
+    foreach ($s in $uninstalled) {
+        if (Install-ProxyToSlot $s) {
+            $installedSlots += $s
         }
-        $maxOpt = $slots.Count
-        Write-Host "  [0] 返回主菜单"
-
-        while ($true) {
-            $sub = (Read-Host "  请选择 (0~$maxOpt)").Trim()
-            if ($sub -eq "0") {
-                return
-            }
-            if ($sub -match '^\d+$') {
-                $num = [int]$sub
-                if ($num -ge 1 -and $num -le $maxOpt) {
-                    Write-Host ""
-                    $target = $slots[$num - 1]
-                    if (Install-ProxyToSlot $target) {
-                        Install-CliProxy -Slots @($target)
-                    }
-                    Wait-ForReturn "操作完成，按回车返回..."
-                    break
-                }
-            }
-            Write-Host "  [!] 输入有误，请输入 0 ~ $maxOpt 之间的编号。" -ForegroundColor Yellow
-        }
+    }
+    if ($installedSlots.Count -gt 0) {
+        Install-CliProxy -Slots $installedSlots
     }
 }
 
@@ -1068,9 +1058,10 @@ while ($true) {
     Write-Host "  安装前会自动关闭对应软件，投放完成后自动重新拉起。" -ForegroundColor DarkGray
     Write-Host "  [1] 打开网页配置 (默认回车)" -ForegroundColor Green
     Write-Host "  [2] 一键安装全部"
-    Write-Host "  [3] 自定义安装"
+    Write-Host "  [3] 仅安装未安装软件"
     Write-Host "  [4] 卸载已安装代理"
     Write-Host "  [5] 检查更新"
+    Write-Host ""
     Write-Host "  [0] 退出"
     Write-Host "==========================================================" -ForegroundColor Cyan
 
@@ -1107,7 +1098,8 @@ while ($true) {
             Wait-ForReturn "操作完成，按回车返回..."
         }
         "3" {
-            Invoke-CustomInstallSubMenu
+            Invoke-InstallUninstalledSlots -Slots $slots
+            Wait-ForReturn "操作完成，按回车返回..."
         }
         "4" {
             Invoke-UninstallSubMenu
