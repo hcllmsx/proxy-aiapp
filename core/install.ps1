@@ -685,7 +685,7 @@ function Invoke-CheckUpdate {
     }
     Write-Host "  [OK] 最新已发布版本: v$($latest.Version)" -ForegroundColor Green
     if ((Compare-CalVer $latest.Version $ver) -gt 0) {
-        Write-Host "  [!] 发现新版本 v$($latest.Version)，请前往 Releases 页面下载更新：" -ForegroundColor Yellow
+        Write-Host "  [!] 发现新版本 v$($latest.Version)，请前往 Releases 页面下载更新：" -ForegroundColor Red
         Write-Host "      $($latest.Page)" -ForegroundColor Cyan
     } else {
         Write-Host "  [OK] 当前已是最新版本。" -ForegroundColor Green
@@ -712,8 +712,8 @@ function Get-ReleaseHighlights {
     return $items
 }
 
-# 检测到新版本时先单独提示，按任意键打开下载页面后再进入主界面。
-# 主界面标题下只有一行黄字，很容易被后续输出刷走，故给一段不会被淹没的独立画面。
+# 检测到新版本时先单独提示，可选择打开下载页面或取消更新直接进入主界面。
+# 主界面标题下只有一行提示，很容易被后续输出刷走，故给一段不会被淹没的独立画面。
 function Show-UpdateNotice {
     param([PSCustomObject]$Latest)
 
@@ -721,12 +721,12 @@ function Show-UpdateNotice {
     $url = "https://github.com/$GithubRepo/releases/latest"
 
     Clear-Host
-    Write-Host "==========================================================" -ForegroundColor Yellow
-    Write-Host "  [!] 发现新版本" -ForegroundColor Yellow
-    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host "==========================================================" -ForegroundColor Red
+    Write-Host "  [!] 发现新版本" -ForegroundColor Red
+    Write-Host "==========================================================" -ForegroundColor Red
     Write-Host ""
     Write-Host ("  当前版本：v{0}" -f $localVer) -ForegroundColor DarkGray
-    Write-Host ("  最新版本：v{0}" -f $Latest.Version) -ForegroundColor Green
+    Write-Host ("  最新版本：v{0}" -f $Latest.Version) -ForegroundColor Red
     Write-Host ""
 
     $highlights = @(Get-ReleaseHighlights -Body $Latest.Body)
@@ -739,14 +739,25 @@ function Show-UpdateNotice {
     }
 
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  按任意键打开下载页面，随后自动进入安装工具..." -ForegroundColor Yellow
-    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host "  按 [Enter] 打开下载页面，按 [Esc] 或 [N] 取消并进入安装工具..." -ForegroundColor Red
+    Write-Host "==========================================================" -ForegroundColor Red
 
+    $shouldOpen = $true
     try {
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        if ($key.VirtualKeyCode -eq 27 -or ([string]$key.Character -match '^[nN]$')) {
+            $shouldOpen = $false
+        }
     } catch {
-        # 个别宿主不支持 RawUI 按键读取，退回按回车
-        $null = Read-Host
+        # 个别宿主不支持 RawUI 按键读取，退回按回车输入
+        $ans = (Read-Host "  直接回车打开下载页面，输入 N 取消").Trim()
+        if ($ans -match '^[nN]$') {
+            $shouldOpen = $false
+        }
+    }
+
+    if (-not $shouldOpen) {
+        return
     }
 
     try {
@@ -1041,7 +1052,7 @@ while ($true) {
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "  当前代理 : $proxyDisplay" -ForegroundColor Yellow
     if ($UpdateHint) {
-        Write-Host "  [!] $UpdateHint" -ForegroundColor Yellow
+        Write-Host "  [!] $UpdateHint" -ForegroundColor Red
     }
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
 
