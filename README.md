@@ -15,7 +15,6 @@
 <p align="center">
   <img src="docs/media/quark-proxy-aiapp.jpeg" alt="夸克网盘下载二维码" width="200">
 </p>
-<p align="center"><b>夸克网盘扫码下载</b></p>
 
 ### 2. 本项目不是「梯子」，不能翻墙
 
