@@ -129,18 +129,40 @@ function Get-WhatsAppSlotStatus {
     }
 }
 
-# 把检测到的 AUMID 回写进 config.json，启动器按它激活应用
-function Set-WhatsAppAumidInConfig {
-    param([string]$Aumid)
-    if ([string]::IsNullOrWhiteSpace($Aumid)) { return $false }
+# 把检测到的 AUMID 回写进 config.json，启动器按它激活应用。
+# 同时同步 whatsapp.enabled 与 target_processes 里的相关进程名，
+# 保证「装上 = 生效、卸掉 = 彻底不生效」，重装时也能自动加回来。
+# -Enabled $false 时从 target_processes 摘除 WhatsApp 相关进程，
+# 否则 msedgewebview2.exe 这个全局匹配项会继续把别的 WebView2 应用误注入。
+function Set-WhatsAppConfigInConfig {
+    param(
+        [string]$Aumid,
+        [bool]$Enabled = $true
+    )
     if (-not (Test-Path $ConfigFile)) { return $false }
     try {
         $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if (-not $cfg.whatsapp) {
             $cfg | Add-Member -NotePropertyName "whatsapp" -NotePropertyValue ([PSCustomObject]@{}) -Force
         }
-        $cfg.whatsapp | Add-Member -NotePropertyName "aumid" -NotePropertyValue $Aumid -Force
-        $cfg.whatsapp | Add-Member -NotePropertyName "enabled" -NotePropertyValue $true -Force
+        if (-not [string]::IsNullOrWhiteSpace($Aumid)) {
+            $cfg.whatsapp | Add-Member -NotePropertyName "aumid" -NotePropertyValue $Aumid -Force
+        }
+        $cfg.whatsapp | Add-Member -NotePropertyName "enabled" -NotePropertyValue $Enabled -Force
+
+        # target_processes 同步增删 WhatsApp 相关进程名
+        $waProcs = @("WhatsApp.Root.exe", "msedgewebview2.exe")
+        $procs = @()
+        if ($cfg.target_processes) { $procs = @($cfg.target_processes) }
+        if ($Enabled) {
+            foreach ($p in $waProcs) {
+                if (-not ($procs | Where-Object { $_ -ieq $p })) { $procs += $p }
+            }
+        } else {
+            $procs = @($procs | Where-Object { $waProcs -notcontains $_ })
+        }
+        $cfg | Add-Member -NotePropertyName "target_processes" -NotePropertyValue $procs -Force
+
         $jsonOut = $cfg | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($ConfigFile, $jsonOut + "`n", (New-Object System.Text.UTF8Encoding($false)))
         return $true
@@ -237,6 +259,64 @@ function Get-MsixSlotDirectory {
         }
     }
     return $null
+}
+
+# 关闭 WhatsApp 及其 WebView2 子进程。
+# msedgewebview2.exe 是全系统共用名（Windows 搜索、小游戏、Teams 等都在用），
+# 按名字一刀切会误杀别的应用，因此这里按父子链定位：只结束挂在
+# WhatsApp.Root 之下的那些 WebView2 进程。
+function Stop-WhatsAppProcesses {
+    param([PSCustomObject]$Slot)
+    $roots = @(Get-Process -Name "WhatsApp.Root" -ErrorAction SilentlyContinue)
+    if ($roots.Count -eq 0) { return $false }
+
+    # 采集 WhatsApp.Root 的全部后代 PID
+    $descendants = @()
+    try {
+        $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        $rootPids = @($roots | ForEach-Object { $_.Id })
+        $childMap = @{}
+        foreach ($p in $all) {
+            $ppid = [int]$p.ParentProcessId
+            if (-not $childMap.ContainsKey($ppid)) { $childMap[$ppid] = @() }
+            $childMap[$ppid] += $p
+        }
+        $queue = New-Object System.Collections.Queue
+        foreach ($r in $rootPids) { $queue.Enqueue($r) }
+        $seen = @{}
+        while ($queue.Count -gt 0) {
+            $cur = [int]$queue.Dequeue()
+            if (-not $childMap.ContainsKey($cur)) { continue }
+            foreach ($c in $childMap[$cur]) {
+                $cid = [int]$c.ProcessId
+                if ($seen.ContainsKey($cid)) { continue }
+                $seen[$cid] = $true
+                $descendants += $c
+                $queue.Enqueue($cid)
+            }
+        }
+    } catch {}
+
+    Write-Host ("  [*] 关闭 {0}：{1} 个主进程 + {2} 个子进程（先优雅关闭窗口，未保存的内容请先自行保存）" -f `
+        $Slot.Name, $roots.Count, $descendants.Count) -ForegroundColor DarkGray
+
+    foreach ($p in $roots) {
+        try { $null = $p.CloseMainWindow() } catch {}
+    }
+    Start-Sleep -Seconds 3
+    foreach ($p in $roots) {
+        try { if (-not $p.HasExited) { $null = $p.Kill() } } catch {}
+    }
+    Start-Sleep -Seconds 1
+    # 父进程已退出，WebView2 子进程若还残留（可能已成孤儿）一并结束
+    foreach ($c in $descendants) {
+        try {
+            $proc = Get-Process -Id ([int]$c.ProcessId) -ErrorAction SilentlyContinue
+            if ($proc) { $null = $proc.Kill() }
+        } catch {}
+    }
+    Start-Sleep -Seconds 1
+    return $true
 }
 
 # 关闭该应用正在运行的进程：投放 version.dll 前必须释放文件占用。
@@ -524,6 +604,10 @@ function Install-LauncherProxy {
         }
     }
 
+    # 投放前先关掉 WhatsApp：注入的 version.dll 会被进程占用，
+    # 不先结束进程就复制，文件占用会导致覆盖失败。
+    $wasRunning = Stop-WhatsAppProcesses $Slot
+
     # 代理主体必须与启动器同目录，启动器注入的也是这一份
     if (-not (Test-Path (Join-Path $CoreDir "version.dll"))) {
         $dllPath = Get-DllSourcePath
@@ -539,10 +623,7 @@ function Install-LauncherProxy {
         }
     }
 
-    # 投放前先关掉 WhatsApp：代理主体被进程占用时无法覆盖
-    $wasRunning = Stop-SlotProcesses $Slot
-
-    if (-not (Set-WhatsAppAumidInConfig $Slot.Aumid)) {
+    if (-not (Set-WhatsAppConfigInConfig -Aumid $Slot.Aumid -Enabled $true)) {
         Write-Host "  [!] 写入 config.json 失败，已中止安装。" -ForegroundColor Red
         return $false
     }
@@ -613,6 +694,10 @@ function Remove-GeminiStaleProxy {
 function Uninstall-ProxyFromSlot {
     param([PSCustomObject]$Slot)
     if ($Slot.Kind -eq "launcher") {
+        # 启动器型目标：注入的 DLL 已被目标进程加载，文件被占用期间删不干净，
+        # 且 Hook 仍留在进程里继续生效（看着像卸载了其实还在走代理）。
+        # 必须先结束进程，卸载才算真正生效。
+        $wasRunning = Stop-WhatsAppProcesses $Slot
         $removed = Remove-WhatsAppShortcut
         $launcher = Join-Path $CoreDir $WhatsAppLauncherName
         if (Test-Path $launcher) {
@@ -626,7 +711,16 @@ function Uninstall-ProxyFromSlot {
                 Remove-Item $icon -Force -ErrorAction Stop
             } catch {}
         }
+        # 关闭 whatsapp 开关并摘掉 target_processes 里的相关进程名，
+        # 否则 msedgewebview2.exe 会继续匹配到别的 WebView2 应用
+        $cfgOk = Set-WhatsAppConfigInConfig -Enabled $false
         Write-Host "  [OK] 已移除 $($Slot.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
+        if ($wasRunning) {
+            Write-Host "      已结束正在运行的 $($Slot.Name)（注入的代理已随进程退出失效）。" -ForegroundColor DarkGray
+        }
+        if (-not $cfgOk) {
+            Write-Host "  [!] config.json 中的 WhatsApp 配置未能清除，可在配置网页里手动关闭。" -ForegroundColor Yellow
+        }
         return
     }
     if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Directory)) {
