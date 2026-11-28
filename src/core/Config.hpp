@@ -62,13 +62,30 @@ namespace Core {
         std::vector<std::string> ports;     // 80 / 443 / 10000-20000
         std::vector<std::string> protocols; // tcp
     };
-
     struct RoutingConfig {
         bool enabled = true;
         std::string priority_mode = "order"; // order/number
         std::string default_action = "proxy";
         bool use_default_private = true;
         std::vector<RoutingRule> rules;
+    };
+
+    // ============= 商店版 WhatsApp 启动器配置 =============
+    // 微软商店版 WhatsApp 的包目录受系统写保护（WindowsApps 不允许普通进程写入），
+    // 无法像 Gemini 那样把 version.dll 直接投放进去，因此改用「运行时注入」：
+    // 由 ProxyLauncher.exe 激活应用，并在进程刚起来的一瞬注入代理 DLL。
+    struct WhatsAppConfig {
+        bool enabled = true;
+        // 应用标识（AUMID）：<包家族名>!<应用 ID>，安装脚本会在检测到应用后回填
+        std::string aumid = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App";
+        // 宿主进程名（.NET + WinUI 外壳）
+        std::string rootProcess = "WhatsApp.Root.exe";
+        // 承载聊天界面与网络栈的 WebView2 宿主进程名
+        std::string webviewProcess = "msedgewebview2.exe";
+        // 启动后持续追踪后代进程的秒数（覆盖 WebView2 子进程的延迟创建）
+        int watchSeconds = 45;
+        // 已注入即视为成功，不再重复注入
+        bool forceRestart = true; // 目标已在运行时先退出再重启，保证首屏就走代理
     };
 
     // ============= 代理路由规则 =============
@@ -654,6 +671,7 @@ namespace Core {
         std::string uiLoadNotify = "once";    // 加载提示策略：once/none/messagebox，默认每个版本成功提示一次
         std::string buildVersion = "0";        // 来自 config.json 的 _version，用于更新检查比较
         UpdateConfig updates;                  // GitHub Release 更新检查配置（默认关闭）
+        WhatsAppConfig whatsapp;               // 商店版 WhatsApp 启动器配置
         bool childInjection = true;     // Phase 2: 是否自动注入子进程
         // 子进程注入模式：
         // - "filtered"（默认）：按 target_processes 过滤
@@ -695,7 +713,9 @@ namespace Core {
             const std::string lowerName = ToLowerCopy(processName);
             if (lowerName == "geminicrashpadhandler.exe" ||
                 lowerName == "chrome_crashpad_handler.exe" ||
-                lowerName == "crashpad_handler.exe") {
+                lowerName == "crashpad_handler.exe" ||
+                // Chromium 系（WebView2 / Edge）实际用的是连字符写法
+                lowerName == "crashpad-handler.exe") {
                 return true;
             }
             if (childInjectionExclude.empty()) return false;
@@ -1077,6 +1097,27 @@ namespace Core {
                     Logger::Info("已加载目标进程列表, 共 " + std::to_string(targetProcesses.size()) + " 项");
                 }
 
+                // 商店版 WhatsApp 启动器配置
+                if (j.contains("whatsapp") && j["whatsapp"].is_object()) {
+                    const auto& wa = j["whatsapp"];
+                    whatsapp.enabled = wa.value("enabled", whatsapp.enabled);
+                    if (wa.contains("aumid") && wa["aumid"].is_string()) {
+                        whatsapp.aumid = wa["aumid"].get<std::string>();
+                    }
+                    if (wa.contains("root_process") && wa["root_process"].is_string()) {
+                        whatsapp.rootProcess = wa["root_process"].get<std::string>();
+                    }
+                    if (wa.contains("webview_process") && wa["webview_process"].is_string()) {
+                        whatsapp.webviewProcess = wa["webview_process"].get<std::string>();
+                    }
+                    whatsapp.watchSeconds = wa.value("watch_seconds", whatsapp.watchSeconds);
+                    whatsapp.forceRestart = wa.value("force_restart", whatsapp.forceRestart);
+                }
+                if (whatsapp.watchSeconds <= 0) {
+                    Logger::Warn("配置: whatsapp.watch_seconds 非法(" + std::to_string(whatsapp.watchSeconds) + ")，已回退为 45");
+                    whatsapp.watchSeconds = 45;
+                }
+
                 Logger::Info("配置: proxy=" + proxy.host + ":" + std::to_string(proxy.port) +
                              " type=" + proxy.type +
                              ", fake_ip=" + std::string(fakeIp.enabled ? "true" : "false") +
@@ -1088,7 +1129,9 @@ namespace Core {
                              ", ui.load_notify=" + uiLoadNotify +
                              ", updates.enabled=" + std::string(updates.enabled ? "true" : "false") +
                              ", updates.delay_ms=" + std::to_string(updates.check_delay_ms) +
-                             ", updates.mirrors=" + std::to_string(updates.mirrors.size()));
+                             ", updates.mirrors=" + std::to_string(updates.mirrors.size()) +
+                             ", whatsapp.enabled=" + std::string(whatsapp.enabled ? "true" : "false") +
+                             ", whatsapp.aumid=" + whatsapp.aumid);
 
                 // CRIT-1/2/WARN-3: 仅在 Load() 成功返回前输出“有效 CIDR 统计 + 跳过数量”，避免失败时误导
                 Logger::Info("路由规则: 编译统计: 有效 IPv4 CIDR=" + std::to_string(rules.compiled_valid_cidr_v4) +

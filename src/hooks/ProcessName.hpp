@@ -100,7 +100,42 @@ inline bool IsCrashpadProcessName(const std::string& processName) {
     const std::string lowerName = ToLowerAsciiCopy(processName);
     return lowerName == "geminicrashpadhandler.exe" ||
            lowerName == "chrome_crashpad_handler.exe" ||
-           lowerName == "crashpad_handler.exe";
+           lowerName == "crashpad_handler.exe" ||
+           // Chromium 系（WebView2 / Edge / Chrome）实际用的是连字符写法
+           lowerName == "crashpad-handler.exe";
+}
+
+// WebView2 / Edge 内核宿主进程：聊天界面与网络栈都在这里，
+// 但它属于嵌入式子进程，不该弹「加载成功」提示。
+inline bool IsWebView2HostProcessName(const std::string& processName) {
+    const std::string lowerName = ToLowerAsciiCopy(processName);
+    return lowerName == "msedgewebview2.exe" ||
+           lowerName == "msedge.exe" ||
+           lowerName == "webview2.exe";
+}
+
+// 商店版 WhatsApp 的宿主进程（.NET + WinUI 外壳，聊天 UI 跑在 WebView2 里）
+inline bool IsWhatsAppHostProcessName(const std::string& processName) {
+    const std::string lowerName = ToLowerAsciiCopy(processName);
+    return lowerName == "whatsapp.root.exe";
+}
+
+// Chromium 沙箱子进程类型：renderer / gpu-process / zygote 处于 AppContainer
+// 之类的受限环境，注入必然失败，而且它们本身不做网络 IO（网络栈在
+// network.mojom.NetworkService），因此在创建阶段就跳过，省掉满屏的失败日志。
+inline bool IsSandboxedChromiumSubprocess(const std::string& commandLine) {
+    if (commandLine.empty()) return false;
+    return commandLine.find("--type=renderer") != std::string::npos ||
+           commandLine.find("--type=gpu-process") != std::string::npos ||
+           commandLine.find("--type=zygote") != std::string::npos ||
+           commandLine.find("--type=crashpad-handler") != std::string::npos;
+}
+
+// WebView2 宿主进程的命令行特征：带 --webview-exe-name= 或 --embedded-browser-webview
+inline bool IsWebView2EmbeddedHostCommandLine(const std::string& commandLine) {
+    if (commandLine.empty()) return false;
+    return commandLine.find("--webview-exe-name=") != std::string::npos ||
+           commandLine.find("--embedded-browser-webview") != std::string::npos;
 }
 
 } // namespace Hooks

@@ -1,5 +1,5 @@
 {
-  "_version": "26.11.26",
+  "_version": "26.11.28",
   "log_level": "info",
   "proxy": {
     "host": "127.0.0.1",
@@ -36,7 +36,8 @@
   "child_injection_mode": "filtered",
   "child_injection_exclude": [
     "GeminiCrashpadHandler.exe",
-    "chrome_crashpad_handler.exe"
+    "chrome_crashpad_handler.exe",
+    "crashpad-handler.exe"
   ],
   "target_processes": [
     "Antigravity.exe",
@@ -47,8 +48,18 @@
     "language_server_windows_x64.exe",
     "language_server.exe",
     "node.exe",
-    "agy.exe"
+    "agy.exe",
+    "WhatsApp.Root.exe",
+    "msedgewebview2.exe"
   ],
+  "whatsapp": {
+    "root_process": "WhatsApp.Root.exe",
+    "webview_process": "msedgewebview2.exe",
+    "watch_seconds": 45,
+    "force_restart": true,
+    "aumid": "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
+    "enabled": true
+  },
   "traffic_logging": false,
   "diagnostics": {
     "agent_ip_probe": false

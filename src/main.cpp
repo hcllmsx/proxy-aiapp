@@ -111,6 +111,24 @@ static bool IsChromiumSubprocess() {
          std::wcsstr(commandLine, L"--type=") != nullptr;
 }
 
+// WebView2 宿主（聊天界面所在的嵌入式浏览器进程）不是用户直接启动的目标程序，
+// 不应该弹出「加载成功」提示，避免一次启动弹好几个框。
+static bool IsEmbeddedWebViewHostProcess() {
+  if (Hooks::IsWebView2HostProcessName(GetCurrentProcessBaseName())) {
+    return true;
+  }
+  const wchar_t *commandLine = GetCommandLineW();
+  if (commandLine == nullptr)
+    return false;
+  return std::wcsstr(commandLine, L"--webview-exe-name=") != nullptr ||
+         std::wcsstr(commandLine, L"--embedded-browser-webview") != nullptr;
+}
+
+// 只有「用户自己启动的主程序」才需要弹窗：后台子进程一律静默。
+static bool ShouldShowLoadNotify() {
+  return !IsChromiumSubprocess() && !IsEmbeddedWebViewHostProcess();
+}
+
 struct LoadNotifyPayload {
   bool success;
   bool askOpenLogs;
@@ -358,13 +376,13 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 
     // WARN-4: 必须检查 Load() 返回值。若加载失败则进入 BYPASS
     // 模式，避免“坏配置导致全局网络不可用”。
-    if (!loaded) {
-      Core::Logger::Error("配置加载失败：已进入 BYPASS 模式（不安装 "
-                          "Hooks）。请检查 config.json 与日志告警信息。");
-      if (!IsChromiumSubprocess()) {
-        MaybeShowLoadNotifyAsync(false);
-      }
-      break;
+if (!loaded) {
+        Core::Logger::Error("配置加载失败：已进入 BYPASS 模式（不安装 "
+                            "Hooks）。请检查 config.json 与日志告警信息。");
+        if (ShouldShowLoadNotify()) {
+            MaybeShowLoadNotifyAsync(false);
+        }
+        break;
     }
 
     // 所有支持客户端（包括 Antigravity / Antigravity IDE 内置浏览器的 Chromium
@@ -378,11 +396,11 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
                   " (Chromium NetworkService) 使用全量模式：安装网络与进程创建 Hook"
             : "当前进程 " + processName +
                   " 使用全量模式：安装网络与进程创建 Hook");
-    Hooks::Install(enableNetworkHooks);
-    if (!IsChromiumSubprocess()) {
-      MaybeShowLoadNotifyAsync(true);
-      // 更新检查默认关闭；启用后也只在后台异步提示，不阻塞 Hook 安装主流程。
-      UpdateChecker::StartAsync();
+Hooks::Install(enableNetworkHooks);
+    if (ShouldShowLoadNotify()) {
+        MaybeShowLoadNotifyAsync(true);
+        // 更新检查默认关闭；启用后也只在后台异步提示，不阻塞 Hook 安装主流程。
+        UpdateChecker::StartAsync();
     }
     break;
   }

@@ -1,4 +1,4 @@
-const APP_VERSION = "26.11.26";
+const APP_VERSION = "26.11.28";
 
 let currentFileHandle = null;
 let extraConfigState = null;
@@ -13,8 +13,13 @@ const DEFAULT_PROCESSES = [
   "language_server_windows_x64.exe",
   "language_server.exe",
   "node.exe",
-  "agy.exe"
+  "agy.exe",
+  "WhatsApp.Root.exe",
+  "msedgewebview2.exe"
 ];
+
+// 商店版 WhatsApp 无法投放代理文件，只能靠启动器在运行时注入
+const WHATSAPP_PROCESSES = ['WhatsApp.Root.exe', 'msedgewebview2.exe'];
 
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -80,6 +85,10 @@ function onTargetCheckChange() {
   toggleProc(claudeOn, 'Claude.exe');
   toggleProc(claudeOn, 'cowork-svc.exe');
 
+  // 商店版 WhatsApp：宿主进程 + 承载网络栈的 WebView2 进程成对开关
+  const whatsAppOn = document.getElementById('chkWhatsApp').checked;
+  WHATSAPP_PROCESSES.forEach(p => toggleProc(whatsAppOn, p));
+
   ['language_server_windows_x64.exe', 'language_server.exe', 'node.exe', 'agy.exe'].forEach(p => {
     const exists = Array.from(set).some(x => x.toLowerCase() === p.toLowerCase());
     if (!exists) set.add(p);
@@ -95,6 +104,7 @@ function syncCheckboxesFromProcessList(list) {
   document.getElementById('chkAntigravity').checked = lower.has('antigravity.exe');
   document.getElementById('chkAntigravityIde').checked = lower.has('antigravity ide.exe');
   document.getElementById('chkClaude').checked = lower.has('claude.exe');
+  document.getElementById('chkWhatsApp').checked = lower.has('whatsapp.root.exe');
 }
 
 function buildConfigObject() {
@@ -150,9 +160,19 @@ function buildConfigObject() {
     child_injection_mode: "filtered",
     child_injection_exclude: [
       "GeminiCrashpadHandler.exe",
-      "chrome_crashpad_handler.exe"
+      "chrome_crashpad_handler.exe",
+      "crashpad-handler.exe"
     ],
     target_processes: procLines.length ? procLines : DEFAULT_PROCESSES.slice(),
+    whatsapp: Object.assign({}, base.whatsapp || {}, {
+      enabled: document.getElementById('chkWhatsApp').checked,
+      aumid: (base.whatsapp && base.whatsapp.aumid) || "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
+      root_process: (base.whatsapp && base.whatsapp.root_process) || "WhatsApp.Root.exe",
+      webview_process: (base.whatsapp && base.whatsapp.webview_process) || "msedgewebview2.exe",
+      watch_seconds: (base.whatsapp && base.whatsapp.watch_seconds) || 45,
+      force_restart: base.whatsapp && base.whatsapp.force_restart !== undefined
+        ? base.whatsapp.force_restart : true
+    }),
     traffic_logging: Boolean(base.traffic_logging),
     diagnostics: base.diagnostics || { agent_ip_probe: false },
     ui: {
@@ -225,6 +245,13 @@ function applyConfigToForm(cfg) {
   if (!procs.some(p => String(p).toLowerCase() === 'gemini.exe')) {
     procs.push('Gemini.exe');
   }
+  // 配置里显式关闭了 WhatsApp 时，同步把它的进程从列表里摘掉
+  if (cfg.whatsapp && cfg.whatsapp.enabled === false) {
+    for (let i = procs.length - 1; i >= 0; i--) {
+      const name = String(procs[i]).toLowerCase();
+      if (WHATSAPP_PROCESSES.some(w => w.toLowerCase() === name)) procs.splice(i, 1);
+    }
+  }
   document.getElementById('targetProcesses').value = procs.join('\n');
   syncCheckboxesFromProcessList(procs);
   onFormChange();
@@ -236,7 +263,8 @@ function updateDetectedTargetsUI(targets) {
     gemini: { tag: 'tagGemini', sub: 'subGemini' },
     antigravity: { tag: 'tagAntigravity', sub: 'subAntigravity' },
     antigravity_ide: { tag: 'tagAntigravityIde', sub: 'subAntigravityIde' },
-    claude: { tag: 'tagClaude', sub: 'subClaude' }
+    claude: { tag: 'tagClaude', sub: 'subClaude' },
+    whatsapp: { tag: 'tagWhatsApp', sub: 'subWhatsApp' }
   };
   targets.forEach(t => {
     const ui = map[t.key];
@@ -244,7 +272,9 @@ function updateDetectedTargetsUI(targets) {
     const tagEl = document.getElementById(ui.tag);
     const subEl = document.getElementById(ui.sub);
     if (t.found) {
-      tagEl.textContent = t.installed ? '已安装代理' : '已检测到软件';
+      tagEl.textContent = t.installed
+        ? (t.key === 'whatsapp' ? '已配置启动器' : '已安装代理')
+        : '已检测到软件';
       tagEl.classList.toggle('installed', Boolean(t.installed));
       subEl.textContent = t.directory;
     } else {
@@ -440,6 +470,7 @@ async function saveAndInstall() {
   if (document.getElementById('chkAntigravity').checked) selectedKeys.push('antigravity');
   if (document.getElementById('chkAntigravityIde').checked) selectedKeys.push('antigravity_ide');
   if (document.getElementById('chkClaude').checked) selectedKeys.push('claude');
+  if (document.getElementById('chkWhatsApp').checked) selectedKeys.push('whatsapp');
 
   try {
     const res = await fetch('/api/install', {

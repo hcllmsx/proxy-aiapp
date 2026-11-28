@@ -32,3 +32,11 @@ Makefile
 logs/
 *.log
 load-notify-success.marker
+
+# Locally dropped runtime files (dev runs / install script)
+# The release package copies the official binaries in at packaging time, no need to track them
+core/version.dll
+core/ProxyLauncher.exe
+core/dbghelp.dll
+core/antigravity_proxy.dll
+core/WhatsApp.ico

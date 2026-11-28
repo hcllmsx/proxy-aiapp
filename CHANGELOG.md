@@ -1,5 +1,9 @@
 # 更新日志
 
+## v26.11.28
+
+- 新增：支持微软商店版 WhatsApp（`WhatsApp.Root.exe`）。其安装目录位于 `WindowsApps` 下受系统写保护，无法像其它客户端那样投放 `version.dll`，改为随包提供 `ProxyLauncher.exe` 启动器：激活应用后立即注入代理，并按后代链追踪注入承载聊天界面与网络栈的 WebView2 进程，**无需开启 TUN 模式或手动切换系统代理，只要本机代理软件在运行即可正常收发消息**。
+
 ## v26.11.26
 
 - 修复：Antigravity 与 Antigravity IDE 的内置浏览器（Chromium `NetworkService` 子进程）纳入全量代理 Hook，无需额外添加 `--proxy-server` 启动参数即可与 AI 对话共用同一代理；本地回环通信继续走早期直连旁路。

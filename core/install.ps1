@@ -7,7 +7,11 @@
     # 开发工具复用：只处理 Antigravity CLI 代理，不触碰任何目标应用
     [switch]$CliInstall,
     [switch]$CliUninstall,
-    [string[]]$CliSlotKeys = @()
+    [string[]]$CliSlotKeys = @(),
+    # 开发工具复用：按槽位键安装 / 卸载（含 WhatsApp 这类启动器型目标）
+    [switch]$SlotInstall,
+    [switch]$SlotUninstall,
+    [string[]]$SlotKeys = @()
 )
 
 # Proxy-AiApp 安装工具 · 基于 GPL-3.0 协议开源
@@ -23,7 +27,7 @@ Set-Location $AppRoot
 $ConfigFile = Join-Path $CoreDir "config.json"
 $WebFile    = Join-Path $AppRoot "index.html"
 $GithubRepo = "hcllmsx/proxy-aiapp"
-$CurrentVer = "26.11.26"
+$CurrentVer = "26.11.28"
 
 # ---------------------------------------------------------------------------
 # 微软商店（MSIX / UWP）应用目标
@@ -40,6 +44,151 @@ $MsixApps = @(
         ProcessNames = @("Claude")
     }
 )
+
+# ---------------------------------------------------------------------------
+# 商店版 WhatsApp：包目录在 C:\Program Files\WindowsApps 下，对普通进程只读，
+# 投放 version.dll 必然失败。因此改用「运行时注入」：把 ProxyLauncher.exe
+# 放到 core\ 目录并创建开始菜单 / 桌面快捷方式，由启动器激活应用并在进程
+# 刚起来的一瞬注入代理 DLL。
+# ---------------------------------------------------------------------------
+$WhatsAppLauncherName = "ProxyLauncher.exe"
+$WhatsAppShortcutName = "WhatsApp（代理）"
+$WhatsAppIconName = "WhatsApp.ico"
+
+# 快捷方式图标：优先用发布包里的 assets\img\WhatsApp.ico。
+# 复制到 core\ 与启动器同目录，快捷方式指向这份绝对路径，避免包目录被移动后图标失效。
+function Install-WhatsAppIcon {
+    $src = Join-Path $AppRoot "assets\img\$WhatsAppIconName"
+    if (-not (Test-Path $src)) { return $null }
+    $dst = Join-Path $CoreDir $WhatsAppIconName
+    try {
+        Copy-Item $src $dst -Force -ErrorAction Stop
+        return $dst
+    } catch {
+        Write-Host "  [!] 复制快捷方式图标失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+}
+
+function Get-WhatsAppAumid {
+    # 首选 Get-StartApps：它直接给出 AUMID（<包家族名>!<应用 ID>）
+    try {
+        foreach ($a in @(Get-StartApps -ErrorAction Stop)) {
+            if (-not $a.AppID -or -not $a.AppID.Contains("!")) { continue }
+            if ($a.Name -match "WhatsApp" -or $a.AppID -match "WhatsApp") {
+                return [string]$a.AppID
+            }
+        }
+    } catch {}
+
+    # 兜底：读包清单里的 Application Id 自行拼装
+    try {
+        $pkg = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -match "WhatsApp" }) | Select-Object -First 1
+        if ($pkg -and $pkg.InstallLocation -and $pkg.PackageFamilyName) {
+            $manifest = Join-Path $pkg.InstallLocation "AppxManifest.xml"
+            if (Test-Path $manifest) {
+                $xml = [xml](Get-Content $manifest -Raw -Encoding UTF8)
+                $app = @($xml.Package.Applications.Application) | Select-Object -First 1
+                if ($app -and $app.Id) {
+                    return "$($pkg.PackageFamilyName)!$($app.Id)"
+                }
+            }
+        }
+    } catch {}
+    return $null
+}
+
+# 快捷方式落点：开始菜单（主）+ 桌面（便捷），目录不存在就跳过
+function Get-WhatsAppShortcutPaths {
+    $paths = @()
+    try {
+        $programs = [Environment]::GetFolderPath("Programs")
+        if ($programs) { $paths += (Join-Path $programs "$WhatsAppShortcutName.lnk") }
+    } catch {}
+    try {
+        $desktop = [Environment]::GetFolderPath("Desktop")
+        if ($desktop) { $paths += (Join-Path $desktop "$WhatsAppShortcutName.lnk") }
+    } catch {}
+    return @($paths)
+}
+
+function Get-WhatsAppSlotStatus {
+    $aumid = Get-WhatsAppAumid
+    $launcher = Join-Path $CoreDir $WhatsAppLauncherName
+    $shortcut = @(Get-WhatsAppShortcutPaths | Where-Object { Test-Path $_ })
+    return [PSCustomObject]@{
+        Key          = "whatsapp"
+        Name         = "WhatsApp"
+        ExeName      = "WhatsApp.Root.exe"
+        Kind         = "launcher"
+        ProcessNames = @("WhatsApp.Root")
+        Found        = ($null -ne $aumid)
+        Directory    = if ($aumid) { $aumid } else { "" }
+        Installed    = ((Test-Path $launcher) -and ($shortcut.Count -gt 0))
+        Aumid        = if ($aumid) { $aumid } else { "" }
+    }
+}
+
+# 把检测到的 AUMID 回写进 config.json，启动器按它激活应用
+function Set-WhatsAppAumidInConfig {
+    param([string]$Aumid)
+    if ([string]::IsNullOrWhiteSpace($Aumid)) { return $false }
+    if (-not (Test-Path $ConfigFile)) { return $false }
+    try {
+        $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $cfg.whatsapp) {
+            $cfg | Add-Member -NotePropertyName "whatsapp" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+        $cfg.whatsapp | Add-Member -NotePropertyName "aumid" -NotePropertyValue $Aumid -Force
+        $cfg.whatsapp | Add-Member -NotePropertyName "enabled" -NotePropertyValue $true -Force
+        $jsonOut = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($ConfigFile, $jsonOut + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        Write-Host "  [!] 回写 config.json 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function New-WhatsAppShortcut {
+    param([string]$LauncherPath, [string]$IconPath)
+    $created = 0
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+    } catch {
+        Write-Host "  [!] 无法创建快捷方式（WScript.Shell 不可用）：$($_.Exception.Message)" -ForegroundColor Yellow
+        return 0
+    }
+    foreach ($path in @(Get-WhatsAppShortcutPaths)) {
+        try {
+            $sc = $shell.CreateShortcut($path)
+            $sc.TargetPath = $LauncherPath
+            $sc.WorkingDirectory = (Split-Path -Parent $LauncherPath)
+            $sc.Description = "通过 Proxy-AiApp 启动 WhatsApp（自动走本地代理）"
+            if ($IconPath -and (Test-Path $IconPath)) {
+                # IconLocation 需要 "绝对路径,图标序号" 格式
+                $sc.IconLocation = "$IconPath,0"
+            }
+            $sc.Save()
+            $created++
+        } catch {
+            Write-Host "  [!] 创建快捷方式失败：$path — $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    return $created
+}
+
+function Remove-WhatsAppShortcut {
+    $removed = 0
+    foreach ($path in @(Get-WhatsAppShortcutPaths)) {
+        if (-not (Test-Path $path)) { continue }
+        try {
+            Remove-Item $path -Force -ErrorAction Stop
+            $removed++
+        } catch {}
+    }
+    return $removed
+}
 
 function Get-DllSourcePath {
     $coreDll = Join-Path $CoreDir "version.dll"
@@ -102,7 +251,8 @@ function Stop-SlotProcesses {
             $src = ""
             try { $src = [string]$p.Path } catch { $src = "" }
             # 能取到路径时只处理本应用目录内的进程，避免误杀同名程序（例如 claude CLI、codex CLI）
-            if ($src -and $Slot.Directory) {
+            # 启动器型目标（WhatsApp）没有可投放的目录，按进程名处理即可
+            if ($src -and $Slot.Directory -and $Slot.Kind -ne "launcher") {
                 if (-not $src.StartsWith(($Slot.Directory + "\"), [System.StringComparison]::OrdinalIgnoreCase)) { continue }
             }
             $targets += $p
@@ -186,6 +336,7 @@ function Convert-SlotToApiObject {
         found     = $Slot.Found
         directory = $Slot.Directory
         installed = $Slot.Installed
+        aumid     = if ($Slot.PSObject.Properties.Name -contains "Aumid") { $Slot.Aumid } else { "" }
     }
 }
 
@@ -254,7 +405,7 @@ function Get-AppSlotStatus {
             Directory    = if ($agIdeDir) { $agIdeDir } else { "" }
             Installed    = if ($agIdeDir) { Test-Path (Join-Path $agIdeDir "version.dll") } else { $false }
         }
-    ) + (Get-MsixSlotStatus)
+    ) + (Get-MsixSlotStatus) + @(Get-WhatsAppSlotStatus)
 }
 
 # 商店包槽位：目录随版本变化，只按包名动态定位，再判断是否已投放
@@ -280,6 +431,9 @@ function Get-MsixSlotStatus {
 
 function Install-ProxyToSlot {
     param([PSCustomObject]$Slot)
+    if ($Slot.Kind -eq "launcher") {
+        return Install-LauncherProxy $Slot
+    }
     if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Directory)) {
         Write-Host "  [!] 本机未检测到 $($Slot.Name) 安装路径，已跳过。" -ForegroundColor Yellow
         return $false
@@ -342,6 +496,81 @@ function Install-ProxyToSlot {
 # 本工具投放过的文件清单；卸载只按此清理，绝不删除应用自身文件。
 $ProxyPayloadFiles = @("version.dll", "dbghelp.dll", "antigravity_proxy.dll", "config.json", "index.html", "config-web.html")
 
+# ---------------------------------------------------------------------------
+# 启动器型目标（WhatsApp）：包目录写不进去，改为部署 ProxyLauncher.exe +
+# 快捷方式 + 回写 AUMID，由启动器在运行时注入。
+# ---------------------------------------------------------------------------
+function Install-LauncherProxy {
+    param([PSCustomObject]$Slot)
+    if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Aumid)) {
+        Write-Host "  [!] 本机未检测到 $($Slot.Name)（微软商店版），已跳过。" -ForegroundColor Yellow
+        return $false
+    }
+
+    $launcher = Join-Path $CoreDir $WhatsAppLauncherName
+    if (-not (Test-Path $launcher)) {
+        # 发布包里自带；开发态从构建目录补一份
+        $built = Join-Path $AppRoot "_temp\build-x64\Release\$WhatsAppLauncherName"
+        if (Test-Path $built) {
+            try {
+                Copy-Item $built $launcher -Force -ErrorAction Stop
+            } catch {
+                Write-Host "  [!] 复制启动器失败：$($_.Exception.Message)" -ForegroundColor Red
+                return $false
+            }
+        } else {
+            Write-Host "  [!] 未找到启动器 $WhatsAppLauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    # 代理主体必须与启动器同目录，启动器注入的也是这一份
+    if (-not (Test-Path (Join-Path $CoreDir "version.dll"))) {
+        $dllPath = Get-DllSourcePath
+        if (-not $dllPath) {
+            Write-Host "  [!] 未找到 version.dll 文件。" -ForegroundColor Red
+            return $false
+        }
+        try {
+            Copy-Item $dllPath (Join-Path $CoreDir "version.dll") -Force -ErrorAction Stop
+        } catch {
+            Write-Host "  [!] 复制 version.dll 失败：$($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    # 投放前先关掉 WhatsApp：代理主体被进程占用时无法覆盖
+    $wasRunning = Stop-SlotProcesses $Slot
+
+    if (-not (Set-WhatsAppAumidInConfig $Slot.Aumid)) {
+        Write-Host "  [!] 写入 config.json 失败，已中止安装。" -ForegroundColor Red
+        return $false
+    }
+
+    $iconPath = Install-WhatsAppIcon
+    $shortcutCount = New-WhatsAppShortcut -LauncherPath $launcher -IconPath $iconPath
+    if ($shortcutCount -le 0) {
+        Write-Host "  [!] 快捷方式创建失败，可手动运行 $launcher 启动。" -ForegroundColor Yellow
+        return $false
+    }
+
+    Write-Host "  [OK] 已为 $($Slot.Name) 配置启动器代理：$launcher" -ForegroundColor Green
+    Write-Host "      已创建快捷方式「$WhatsAppShortcutName」（开始菜单 + 桌面），请用该快捷方式启动 WhatsApp。" -ForegroundColor DarkGray
+    if ($iconPath) {
+        Write-Host "      快捷方式图标：$iconPath" -ForegroundColor DarkGray
+    }
+
+    if ($wasRunning) {
+        Write-Host "  [*] 正在通过启动器重新拉起 $($Slot.Name)..." -ForegroundColor DarkGray
+        try {
+            Start-Process -FilePath $launcher -WorkingDirectory $CoreDir | Out-Null
+        } catch {
+            Write-Host "  [!] 自动启动失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    return $true
+}
+
 function Remove-ProxyFiles {
     param([string]$Directory)
     foreach ($f in $ProxyPayloadFiles) {
@@ -383,6 +612,23 @@ function Remove-GeminiStaleProxy {
 
 function Uninstall-ProxyFromSlot {
     param([PSCustomObject]$Slot)
+    if ($Slot.Kind -eq "launcher") {
+        $removed = Remove-WhatsAppShortcut
+        $launcher = Join-Path $CoreDir $WhatsAppLauncherName
+        if (Test-Path $launcher) {
+            try {
+                Remove-Item $launcher -Force -ErrorAction Stop
+            } catch {}
+        }
+        $icon = Join-Path $CoreDir $WhatsAppIconName
+        if (Test-Path $icon) {
+            try {
+                Remove-Item $icon -Force -ErrorAction Stop
+            } catch {}
+        }
+        Write-Host "  [OK] 已移除 $($Slot.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
+        return
+    }
     if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Directory)) {
         Write-Host "  [!] 本机未检测到 $($Slot.Name) 安装路径，已跳过。" -ForegroundColor Yellow
         return
@@ -521,6 +767,7 @@ function Get-SlotStatusLabel {
     if (-not $Slot.Found) { return "[未检测到]" }
     if (-not $Slot.Installed) { return "[未安装]" }
     if ($Slot.Kind -eq "msix") { return "[已注入]" }
+    if ($Slot.Kind -eq "launcher") { return "[已配置启动器]" }
     return "[已安装]"
 }
 
@@ -990,6 +1237,25 @@ if ($CliInstall -or $CliUninstall) {
         Install-CliProxy -Slots $cliSlots
     } else {
         Uninstall-CliProxy -Slots $cliSlots
+    }
+    exit 0
+}
+
+if ($SlotInstall -or $SlotUninstall) {
+    if ($SlotInstall -and $SlotUninstall) {
+        throw "-SlotInstall 与 -SlotUninstall 不能同时使用。"
+    }
+    $targetSlots = @(Get-AppSlotStatus)
+    if ($SlotKeys.Count -gt 0) {
+        $targetSlots = @($targetSlots | Where-Object { $SlotKeys -contains $_.Key })
+    }
+    foreach ($s in $targetSlots) {
+        if (-not $s.Found) { continue }
+        if ($SlotInstall) {
+            Install-ProxyToSlot $s | Out-Null
+        } else {
+            Uninstall-ProxyFromSlot $s
+        }
     }
     exit 0
 }

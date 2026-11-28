@@ -544,6 +544,19 @@ static std::string GetCreateProcessTargetBaseNameW(LPCWSTR applicationName, LPCW
                                            cmd.empty() ? nullptr : cmd.c_str());
 }
 
+// Chromium 的 renderer / gpu-process / zygote 处于沙箱受限环境，
+// 注入必然失败，且这些进程不做网络 IO（网络栈在 network.mojom.NetworkService），
+// 因此在创建阶段就跳过，避免日志里堆满无意义的注入失败记录。
+static bool IsSandboxedChromiumChildW(LPCWSTR commandLine) {
+    if (!commandLine) return false;
+    return Hooks::IsSandboxedChromiumSubprocess(WideToUtf8(commandLine));
+}
+
+static bool IsSandboxedChromiumChildA(LPCSTR commandLine) {
+    if (!commandLine) return false;
+    return Hooks::IsSandboxedChromiumSubprocess(std::string(commandLine));
+}
+
 static std::string FormatHexDword(DWORD value) {
     char buffer[2 + sizeof(DWORD) * 2] = {'0', 'x'};
     const auto converted = std::to_chars(buffer + 2, buffer + sizeof(buffer), value, 16);
@@ -4065,10 +4078,12 @@ BOOL WINAPI DetourCreateProcessW(
         std::string appName = GetCreateProcessTargetBaseNameW(lpApplicationName, lpCommandLine);
         const std::string diagnosticContext = BuildCreateProcessDiagnosticContext(
             "CreateProcessW", dwCreationFlags, modifiedFlags, *lpProcessInformation, appName);
-        
+
         const bool excluded = config.IsChildInjectionExcluded(appName);
+        const bool chromiumSandbox = IsSandboxedChromiumChildW(lpCommandLine);
         const bool compatInject = (!excluded) && ShouldAutoInjectLanguageServerNodeChild(config, appName);
-        const bool shouldInject = (!excluded) && (config.childInjectionMode == "inherit" || config.ShouldInject(appName) || compatInject);
+        const bool shouldInject = (!excluded) && (!chromiumSandbox) &&
+                                  (config.childInjectionMode == "inherit" || config.ShouldInject(appName) || compatInject);
 
         // 检查是否需要注入子进程（受 child_injection_mode/排除列表影响）
         if (!shouldInject) {
@@ -4087,6 +4102,9 @@ BOOL WINAPI DetourCreateProcessW(
             if (shouldLog) {
                 if (excluded) {
                     Core::Logger::Info("[跳过] 子进程在 child_injection_exclude 列表(仅首次记录): " +
+                                       diagnosticContext);
+                } else if (chromiumSandbox) {
+                    Core::Logger::Info("[跳过] Chromium 沙箱子进程(renderer/gpu/zygote)，不做网络 IO(仅首次记录): " +
                                        diagnosticContext);
                 } else {
                     Core::Logger::Info("[跳过] child_injection_mode=filtered 非目标进程(仅首次记录): " +
@@ -4168,10 +4186,12 @@ BOOL WINAPI DetourCreateProcessA(
         std::string appName = GetCreateProcessTargetBaseNameA(lpApplicationName, lpCommandLine);
         const std::string diagnosticContext = BuildCreateProcessDiagnosticContext(
             "CreateProcessA", dwCreationFlags, modifiedFlags, *lpProcessInformation, appName);
-        
+
         const bool excluded = config.IsChildInjectionExcluded(appName);
+        const bool chromiumSandbox = IsSandboxedChromiumChildA(lpCommandLine);
         const bool compatInject = (!excluded) && ShouldAutoInjectLanguageServerNodeChild(config, appName);
-        const bool shouldInject = (!excluded) && (config.childInjectionMode == "inherit" || config.ShouldInject(appName) || compatInject);
+        const bool shouldInject = (!excluded) && (!chromiumSandbox) &&
+                                  (config.childInjectionMode == "inherit" || config.ShouldInject(appName) || compatInject);
 
         // 检查是否需要注入子进程（受 child_injection_mode/排除列表影响）
         if (!shouldInject) {
@@ -4190,6 +4210,9 @@ BOOL WINAPI DetourCreateProcessA(
             if (shouldLog) {
                 if (excluded) {
                     Core::Logger::Info("[跳过] 子进程在 child_injection_exclude 列表(仅首次记录): " +
+                                       diagnosticContext);
+                } else if (chromiumSandbox) {
+                    Core::Logger::Info("[跳过] Chromium 沙箱子进程(renderer/gpu/zygote)，不做网络 IO(仅首次记录): " +
                                        diagnosticContext);
                 } else {
                     Core::Logger::Info("[跳过] child_injection_mode=filtered 非目标进程(仅首次记录): " +

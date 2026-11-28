@@ -172,6 +172,32 @@ if(WIN32)
 endif()
 
 ###################
+#    LAUNCHER      #
+###################
+# 商店应用启动器：WindowsApps 目录对普通进程只读，无法把 version.dll 投放进去，
+# 因此改用运行时注入（激活 AUMID + 启动瞬间注入 + 按后代链追踪 WebView2 进程）。
+add_executable(proxy_launcher WIN32
+  "src/launcher/ProxyLauncher.cpp"
+)
+
+target_include_directories(proxy_launcher PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(proxy_launcher PRIVATE shell32 user32)
+
+if(NOT MSVC AND STATIC_RUNTIME)
+  target_link_options(proxy_launcher PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+
+if(WIN32)
+  set_target_properties(proxy_launcher PROPERTIES OUTPUT_NAME "ProxyLauncher")
+  set_target_properties(proxy_launcher PROPERTIES DEBUG_POSTFIX ".x64d")
+  set_target_properties(proxy_launcher PROPERTIES RELEASE_POSTFIX "")
+endif()
+
+###################
 #     INSTALL     #
 ###################
 install(TARGETS version dbghelp RUNTIME DESTINATION "bin")
