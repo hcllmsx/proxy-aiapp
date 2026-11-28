@@ -15,11 +15,17 @@ const DEFAULT_PROCESSES = [
   "node.exe",
   "agy.exe",
   "WhatsApp.Root.exe",
-  "msedgewebview2.exe"
+  "msedgewebview2.exe",
+  "ChatGPT.exe",
+  "codex.exe"
 ];
 
 // 商店版 WhatsApp 无法投放代理文件，只能靠启动器在运行时注入
 const WHATSAPP_PROCESSES = ['WhatsApp.Root.exe', 'msedgewebview2.exe'];
+
+// 商店版 ChatGPT 同样是启动器注入：
+// ChatGPT.exe 承载 Electron 的网络服务进程，codex.exe（Rust CLI）负责真正的 API 通信
+const CHATGPT_PROCESSES = ['ChatGPT.exe', 'codex.exe'];
 
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -89,6 +95,10 @@ function onTargetCheckChange() {
   const whatsAppOn = document.getElementById('chkWhatsApp').checked;
   WHATSAPP_PROCESSES.forEach(p => toggleProc(whatsAppOn, p));
 
+  // 商店版 ChatGPT：Electron 网络服务进程 + codex.exe 成对开关
+  const chatgptOn = document.getElementById('chkChatGPT').checked;
+  CHATGPT_PROCESSES.forEach(p => toggleProc(chatgptOn, p));
+
   ['language_server_windows_x64.exe', 'language_server.exe', 'node.exe', 'agy.exe'].forEach(p => {
     const exists = Array.from(set).some(x => x.toLowerCase() === p.toLowerCase());
     if (!exists) set.add(p);
@@ -105,6 +115,7 @@ function syncCheckboxesFromProcessList(list) {
   document.getElementById('chkAntigravityIde').checked = lower.has('antigravity ide.exe');
   document.getElementById('chkClaude').checked = lower.has('claude.exe');
   document.getElementById('chkWhatsApp').checked = lower.has('whatsapp.root.exe');
+  document.getElementById('chkChatGPT').checked = lower.has('chatgpt.exe');
 }
 
 function buildConfigObject() {
@@ -168,10 +179,22 @@ function buildConfigObject() {
       enabled: document.getElementById('chkWhatsApp').checked,
       aumid: (base.whatsapp && base.whatsapp.aumid) || "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
       root_process: (base.whatsapp && base.whatsapp.root_process) || "WhatsApp.Root.exe",
-      webview_process: (base.whatsapp && base.whatsapp.webview_process) || "msedgewebview2.exe",
+      child_processes: (base.whatsapp && base.whatsapp.child_processes) ||
+        (base.whatsapp && base.whatsapp.webview_process ? [base.whatsapp.webview_process] : null) ||
+        ["msedgewebview2.exe"],
       watch_seconds: (base.whatsapp && base.whatsapp.watch_seconds) || 45,
       force_restart: base.whatsapp && base.whatsapp.force_restart !== undefined
         ? base.whatsapp.force_restart : true
+    }),
+    chatgpt: Object.assign({}, base.chatgpt || {}, {
+      enabled: document.getElementById('chkChatGPT').checked,
+      aumid: (base.chatgpt && base.chatgpt.aumid) || "OpenAI.Codex_2p2nqsd0c76g0!App",
+      root_process: (base.chatgpt && base.chatgpt.root_process) || "ChatGPT.exe",
+      child_processes: (base.chatgpt && base.chatgpt.child_processes) ||
+        ["ChatGPT.exe", "codex.exe"],
+      watch_seconds: (base.chatgpt && base.chatgpt.watch_seconds) || 45,
+      force_restart: base.chatgpt && base.chatgpt.force_restart !== undefined
+        ? base.chatgpt.force_restart : true
     }),
     traffic_logging: Boolean(base.traffic_logging),
     diagnostics: base.diagnostics || { agent_ip_probe: false },
@@ -252,6 +275,13 @@ function applyConfigToForm(cfg) {
       if (WHATSAPP_PROCESSES.some(w => w.toLowerCase() === name)) procs.splice(i, 1);
     }
   }
+  // 配置里显式关闭了 ChatGPT 时，同步把它的进程从列表里摘掉
+  if (cfg.chatgpt && cfg.chatgpt.enabled === false) {
+    for (let i = procs.length - 1; i >= 0; i--) {
+      const name = String(procs[i]).toLowerCase();
+      if (CHATGPT_PROCESSES.some(w => w.toLowerCase() === name)) procs.splice(i, 1);
+    }
+  }
   document.getElementById('targetProcesses').value = procs.join('\n');
   syncCheckboxesFromProcessList(procs);
   onFormChange();
@@ -264,7 +294,8 @@ function updateDetectedTargetsUI(targets) {
     antigravity: { tag: 'tagAntigravity', sub: 'subAntigravity' },
     antigravity_ide: { tag: 'tagAntigravityIde', sub: 'subAntigravityIde' },
     claude: { tag: 'tagClaude', sub: 'subClaude' },
-    whatsapp: { tag: 'tagWhatsApp', sub: 'subWhatsApp' }
+    whatsapp: { tag: 'tagWhatsApp', sub: 'subWhatsApp' },
+    chatgpt: { tag: 'tagChatGPT', sub: 'subChatGPT' }
   };
   targets.forEach(t => {
     const ui = map[t.key];
@@ -273,13 +304,23 @@ function updateDetectedTargetsUI(targets) {
     const subEl = document.getElementById(ui.sub);
     if (t.found) {
       tagEl.textContent = t.installed
-        ? (t.key === 'whatsapp' ? '已配置启动器' : '已安装代理')
+        ? (t.kind === 'launcher' ? '已配置启动器' : '已安装代理')
         : '已检测到软件';
       tagEl.classList.toggle('installed', Boolean(t.installed));
       subEl.textContent = t.directory;
     } else {
       tagEl.textContent = '本机未检测到';
       tagEl.classList.remove('installed');
+    }
+    // 登录回调端口被系统排除 → 登录必失败（os error 10013），与代理无关
+    if (t.port_conflict) {
+      const ports = (t.port_conflicts || []).join(', ');
+      tagEl.textContent = '登录端口被占用';
+      tagEl.classList.remove('installed');
+      subEl.textContent = `端口 ${ports} 被系统排除，登录会失败（os error 10013）`;
+      subEl.style.color = 'var(--danger, #d93025)';
+    } else if (t.found) {
+      subEl.style.color = '';
     }
   });
 }
@@ -471,6 +512,7 @@ async function saveAndInstall() {
   if (document.getElementById('chkAntigravityIde').checked) selectedKeys.push('antigravity_ide');
   if (document.getElementById('chkClaude').checked) selectedKeys.push('claude');
   if (document.getElementById('chkWhatsApp').checked) selectedKeys.push('whatsapp');
+  if (document.getElementById('chkChatGPT').checked) selectedKeys.push('chatgpt');
 
   try {
     const res = await fetch('/api/install', {

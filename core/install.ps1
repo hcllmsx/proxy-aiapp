@@ -46,21 +46,66 @@ $MsixApps = @(
 )
 
 # ---------------------------------------------------------------------------
-# 商店版 WhatsApp：包目录在 C:\Program Files\WindowsApps 下，对普通进程只读，
+# 启动器型目标（包目录写不进去，只能运行时注入）
+#
+# 微软商店应用的包目录在 C:\Program Files\WindowsApps 下，对普通进程只读，
 # 投放 version.dll 必然失败。因此改用「运行时注入」：把 ProxyLauncher.exe
 # 放到 core\ 目录并创建开始菜单 / 桌面快捷方式，由启动器激活应用并在进程
 # 刚起来的一瞬注入代理 DLL。
+#
+# 这里用一张表描述所有启动器型目标，新增商店应用只需加一段：
+#   StartAppNamePattern / StartAppIdPattern —— 开始菜单里识别这个应用
+#   PackageNamePattern                      —— 商店包名匹配规则
+#   RootProcess                             —— 宿主进程名（不含 .exe）
+#   ChildProcesses                          —— 需要注入的子进程（含 .exe）
+#   TargetProcesses                         —— target_processes 里同步增删的条目
 # ---------------------------------------------------------------------------
-$WhatsAppLauncherName = "ProxyLauncher.exe"
-$WhatsAppShortcutName = "WhatsApp（代理）"
-$WhatsAppIconName = "WhatsApp.ico"
+$LauncherName = "ProxyLauncher.exe"
 
-# 快捷方式图标：优先用发布包里的 assets\img\WhatsApp.ico。
+$LauncherApps = @(
+    [PSCustomObject]@{
+        Key                = "whatsapp"
+        Name               = "WhatsApp"
+        ShortcutName       = "WhatsApp（代理）"
+        IconName           = "WhatsApp.ico"
+        StartAppNamePattern = "WhatsApp"
+        StartAppIdPattern   = "WhatsApp"
+        PackageNamePattern  = "WhatsApp"
+        RootProcess        = "WhatsApp.Root"
+        ChildProcesses     = @("msedgewebview2.exe")
+        TargetProcesses    = @("WhatsApp.Root.exe", "msedgewebview2.exe")
+        # 本地登录/授权回调端口（OAuth 本地服务器）。为空表示该目标不涉及。
+        LoginCallbackPorts = @()
+    },
+    [PSCustomObject]@{
+        # 微软商店版 ChatGPT 的包名是 OpenAI.Codex，但开始菜单里显示名是 ChatGPT
+        Key                = "chatgpt"
+        Name               = "ChatGPT"
+        ShortcutName       = "ChatGPT（代理）"
+        IconName           = "ChatGPT.ico"
+        StartAppNamePattern = "^ChatGPT$"
+        StartAppIdPattern   = "OpenAI\.Codex|ChatGPT"
+        PackageNamePattern  = "OpenAI\.Codex|ChatGPT"
+        RootProcess        = "ChatGPT"
+        # Electron 应用：界面与网络栈都在 ChatGPT.exe 的 utility 子进程里，
+        # 另外 codex.exe（Rust CLI）负责真正的 API 通信，三者都要注入。
+        ChildProcesses     = @("ChatGPT.exe", "codex.exe")
+        TargetProcesses    = @("ChatGPT.exe", "codex.exe")
+        # ChatGPT 登录时会在本机起一个 OAuth 回调服务器，候选端口写死在
+        # app.asar 里（app_EMoamEEZ73f0CkXaXp7hrann 的端口列表 [1455,1457]）。
+        # 若这些端口被系统排除（Hyper-V / 容器 / 虚拟化会预留大批端口），
+        # 登录会直接失败并报 os error 10013，与代理注入无关。
+        LoginCallbackPorts = @(1455, 1457)
+    }
+)
+
+# 快捷方式图标：优先用发布包里的 assets\img\<IconName>。
 # 复制到 core\ 与启动器同目录，快捷方式指向这份绝对路径，避免包目录被移动后图标失效。
-function Install-WhatsAppIcon {
-    $src = Join-Path $AppRoot "assets\img\$WhatsAppIconName"
+function Install-LauncherIcon {
+    param([PSCustomObject]$App)
+    $src = Join-Path $AppRoot "assets\img\$($App.IconName)"
     if (-not (Test-Path $src)) { return $null }
-    $dst = Join-Path $CoreDir $WhatsAppIconName
+    $dst = Join-Path $CoreDir $App.IconName
     try {
         Copy-Item $src $dst -Force -ErrorAction Stop
         return $dst
@@ -70,12 +115,13 @@ function Install-WhatsAppIcon {
     }
 }
 
-function Get-WhatsAppAumid {
+function Get-LauncherAumid {
+    param([PSCustomObject]$App)
     # 首选 Get-StartApps：它直接给出 AUMID（<包家族名>!<应用 ID>）
     try {
         foreach ($a in @(Get-StartApps -ErrorAction Stop)) {
             if (-not $a.AppID -or -not $a.AppID.Contains("!")) { continue }
-            if ($a.Name -match "WhatsApp" -or $a.AppID -match "WhatsApp") {
+            if (($a.Name -match $App.StartAppNamePattern) -or ($a.AppID -match $App.StartAppIdPattern)) {
                 return [string]$a.AppID
             }
         }
@@ -83,12 +129,15 @@ function Get-WhatsAppAumid {
 
     # 兜底：读包清单里的 Application Id 自行拼装
     try {
-        $pkg = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -match "WhatsApp" }) | Select-Object -First 1
+        $pkg = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -match $App.PackageNamePattern }) | Select-Object -First 1
         if ($pkg -and $pkg.InstallLocation -and $pkg.PackageFamilyName) {
             $manifest = Join-Path $pkg.InstallLocation "AppxManifest.xml"
             if (Test-Path $manifest) {
                 $xml = [xml](Get-Content $manifest -Raw -Encoding UTF8)
-                $app = @($xml.Package.Applications.Application) | Select-Object -First 1
+                $apps = @($xml.Package.Applications.Application)
+                # 清单里除了主应用还可能有扩展宿主等其它 Application，优先取 Id="App"
+                $app = @($apps | Where-Object { $_.Id -eq "App" }) | Select-Object -First 1
+                if (-not $app) { $app = $apps | Select-Object -First 1 }
                 if ($app -and $app.Id) {
                     return "$($pkg.PackageFamilyName)!$($app.Id)"
                 }
@@ -99,67 +148,197 @@ function Get-WhatsAppAumid {
 }
 
 # 快捷方式落点：开始菜单（主）+ 桌面（便捷），目录不存在就跳过
-function Get-WhatsAppShortcutPaths {
+function Get-LauncherShortcutPaths {
+    param([PSCustomObject]$App)
     $paths = @()
     try {
         $programs = [Environment]::GetFolderPath("Programs")
-        if ($programs) { $paths += (Join-Path $programs "$WhatsAppShortcutName.lnk") }
+        if ($programs) { $paths += (Join-Path $programs "$($App.ShortcutName).lnk") }
     } catch {}
     try {
         $desktop = [Environment]::GetFolderPath("Desktop")
-        if ($desktop) { $paths += (Join-Path $desktop "$WhatsAppShortcutName.lnk") }
+        if ($desktop) { $paths += (Join-Path $desktop "$($App.ShortcutName).lnk") }
     } catch {}
     return @($paths)
 }
 
-function Get-WhatsAppSlotStatus {
-    $aumid = Get-WhatsAppAumid
-    $launcher = Join-Path $CoreDir $WhatsAppLauncherName
-    $shortcut = @(Get-WhatsAppShortcutPaths | Where-Object { Test-Path $_ })
+function Get-LauncherSlotStatus {
+    param([PSCustomObject]$App)
+    $aumid = Get-LauncherAumid $App
+    $launcher = Join-Path $CoreDir $LauncherName
+    $shortcut = @(Get-LauncherShortcutPaths $App | Where-Object { Test-Path $_ })
+    # 登录回调端口被系统排除时，登录必失败（os error 10013），与代理无关。
+    # 状态里带上这个信息，网页端可以给出提示。
+    $conflicts = Get-LoginCallbackPortConflicts -App $App
     return [PSCustomObject]@{
-        Key          = "whatsapp"
-        Name         = "WhatsApp"
-        ExeName      = "WhatsApp.Root.exe"
+        Key          = $App.Key
+        Name         = $App.Name
+        ExeName      = "$($App.RootProcess).exe"
         Kind         = "launcher"
-        ProcessNames = @("WhatsApp.Root")
+        ProcessNames = @($App.RootProcess)
         Found        = ($null -ne $aumid)
         Directory    = if ($aumid) { $aumid } else { "" }
         Installed    = ((Test-Path $launcher) -and ($shortcut.Count -gt 0))
         Aumid        = if ($aumid) { $aumid } else { "" }
+        LauncherApp  = $App
+        PortConflict = ($conflicts.Count -gt 0)
+        PortConflicts = @($conflicts | ForEach-Object { $_.Port })
     }
 }
 
-# 把检测到的 AUMID 回写进 config.json，启动器按它激活应用。
-# 同时同步 whatsapp.enabled 与 target_processes 里的相关进程名，
-# 保证「装上 = 生效、卸掉 = 彻底不生效」，重装时也能自动加回来。
-# -Enabled $false 时从 target_processes 摘除 WhatsApp 相关进程，
-# 否则 msedgewebview2.exe 这个全局匹配项会继续把别的 WebView2 应用误注入。
-function Set-WhatsAppConfigInConfig {
+# 判断除当前目标外，是否还有别的启动器型目标在用 ProxyLauncher.exe。
+# 共用同一个启动器时，卸载其中一个不能把 exe 删掉，否则另一个目标直接失效。
+function Test-OtherLauncherInstalled {
+    param([PSCustomObject]$App)
+    foreach ($other in $LauncherApps) {
+        if ($other.Key -eq $App.Key) { continue }
+        $exists = @(Get-LauncherShortcutPaths $other | Where-Object { Test-Path $_ })
+        if ($exists.Count -gt 0) { return $true }
+    }
+    return $false
+}
+
+# ---------------------------------------------------------------------------
+# 本地登录回调端口冲突检测
+#
+# 商店版 ChatGPT 登录时会在本机起一个 OAuth 回调服务器（http://localhost:1455），
+# 端口候选写死在 app.asar 里。如果这些端口被系统排除（Hyper-V / WSL / 容器
+# 之类的虚拟化组件会预留大批端口），bind 就会失败，应用报
+#   登录失败: failed to start login server: ... (os error 10013)
+# 这个故障发生在 bind 阶段，与代理注入完全无关——不注入也照样失败。
+#
+# 这里做两件事：
+#   1. 读出系统当前的 TCP 排除端口范围
+#   2. 检查目标需要的回调端口是否落在其中
+# ---------------------------------------------------------------------------
+function Get-ExcludedTcpPortRanges {
+    $ranges = @()
+    try {
+        $out = & netsh int ipv4 show excludedportrange protocol=tcp 2>$null
+        if (-not $out) { return $ranges }
+        foreach ($line in @($out)) {
+            # 形如：  1414        1513
+            if ($line -match '^\s*(\d+)\s+(\d+)\s*\*?\s*$') {
+                $ranges += [PSCustomObject]@{
+                    Start = [int]$matches[1]
+                    End   = [int]$matches[2]
+                }
+            }
+        }
+    } catch {}
+    return @($ranges)
+}
+
+# 返回被排除端口与目标回调端口的冲突列表
+function Get-LoginCallbackPortConflicts {
+    param([PSCustomObject]$App)
+    $conflicts = @()
+    $ports = @()
+    if ($App.PSObject.Properties.Name -contains "LoginCallbackPorts") {
+        $ports = @($App.LoginCallbackPorts)
+    }
+    if ($ports.Count -eq 0) { return $conflicts }
+
+    $ranges = Get-ExcludedTcpPortRanges
+    if ($ranges.Count -eq 0) { return $conflicts }
+
+    foreach ($p in $ports) {
+        foreach ($r in $ranges) {
+            if ($p -ge $r.Start -and $p -le $r.End) {
+                $conflicts += [PSCustomObject]@{
+                    Port  = $p
+                    Start = $r.Start
+                    End   = $r.End
+                }
+            }
+        }
+    }
+    return @($conflicts)
+}
+
+# 有冲突时给出可执行的修复指引。
+#
+# 关键点：这些排除段大多不带 '*'（非管理型），是 HNS / Hyper-V 在运行时
+# 动态预留的，用 `netsh delete excludedportrange` 会直接报「Access is denied」，
+# 删不掉。真正有效的做法是把动态端口范围调回 Windows 默认值
+# （49152 起、16384 个），HNS 就会把预留段重新分配到高端口区，
+# 低端口区（1455 / 1457 所在段）自然释放。改完需要重启电脑。
+function Write-LoginCallbackConflictHint {
     param(
+        [PSCustomObject]$App,
+        [object[]]$Conflicts
+    )
+    if (-not $Conflicts -or $Conflicts.Count -eq 0) { return }
+
+    Write-Host "  [!] $($App.Name) 的登录回调端口被系统排除，登录会失败（os error 10013）" -ForegroundColor Red
+    Write-Host "      冲突端口: $(($Conflicts | ForEach-Object { $_.Port }) -join ', ')" -ForegroundColor Yellow
+
+    # 按排除段去重，逐段说明
+    $seen = @{}
+    foreach ($c in $Conflicts) {
+        $key = "$($c.Start)-$($c.End)"
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $count = $c.End - $c.Start + 1
+        Write-Host "      落在排除段: $($c.Start)-$($c.End)  ($count 个端口)" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "      原因：这些低端口段多由 Hyper-V / WSL / 容器等虚拟化组件动态预留，" -ForegroundColor Cyan
+    Write-Host "      它们不带 '*' 标记，无法用 netsh delete excludedportrange 删除。" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "      修复方法（需管理员身份打开 PowerShell 执行，执行后需重启电脑）:" -ForegroundColor White
+    Write-Host "        netsh int ipv4 set dynamicport tcp start=49152 num=16384" -ForegroundColor White
+    Write-Host "        netsh int ipv6 set dynamicport tcp start=49152 num=16384" -ForegroundColor White
+    Write-Host ""
+    Write-Host "      改完后虚拟化组件会把预留段挪到高端口区，冲突端口即恢复可用。" -ForegroundColor DarkGray
+    Write-Host "      若提示「请求的操作需要提升」，请右键以管理员身份运行 PowerShell。" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+# 把检测到的 AUMID 回写进 config.json，启动器按它激活应用。
+# 同时同步 <key>.enabled 与 target_processes 里的相关进程名，
+# 保证「装上 = 生效、卸掉 = 彻底不生效」，重装时也能自动加回来。
+# -Enabled $false 时从 target_processes 摘除该目标的进程，
+# 否则像 msedgewebview2.exe 这种全局匹配项会继续把别的应用误注入。
+function Set-LauncherConfigInConfig {
+    param(
+        [PSCustomObject]$App,
         [string]$Aumid,
         [bool]$Enabled = $true
     )
     if (-not (Test-Path $ConfigFile)) { return $false }
     try {
         $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $cfg.whatsapp) {
-            $cfg | Add-Member -NotePropertyName "whatsapp" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        if (-not $cfg.PSObject.Properties[$App.Key]) {
+            $cfg | Add-Member -NotePropertyName $App.Key -NotePropertyValue ([PSCustomObject]@{}) -Force
         }
+        $section = $cfg.($App.Key)
         if (-not [string]::IsNullOrWhiteSpace($Aumid)) {
-            $cfg.whatsapp | Add-Member -NotePropertyName "aumid" -NotePropertyValue $Aumid -Force
+            $section | Add-Member -NotePropertyName "aumid" -NotePropertyValue $Aumid -Force
         }
-        $cfg.whatsapp | Add-Member -NotePropertyName "enabled" -NotePropertyValue $Enabled -Force
+        $section | Add-Member -NotePropertyName "enabled" -NotePropertyValue $Enabled -Force
+        $section | Add-Member -NotePropertyName "root_process" -NotePropertyValue "$($App.RootProcess).exe" -Force
+        $section | Add-Member -NotePropertyName "child_processes" -NotePropertyValue @($App.ChildProcesses) -Force
+        # 旧版配置里的单值写法，避免与 child_processes 并存造成歧义
+        if ($section.PSObject.Properties["webview_process"]) {
+            $section.PSObject.Properties.Remove("webview_process")
+        }
+        if (-not $section.PSObject.Properties["watch_seconds"]) {
+            $section | Add-Member -NotePropertyName "watch_seconds" -NotePropertyValue 45 -Force
+        }
+        if (-not $section.PSObject.Properties["force_restart"]) {
+            $section | Add-Member -NotePropertyName "force_restart" -NotePropertyValue $true -Force
+        }
 
-        # target_processes 同步增删 WhatsApp 相关进程名
-        $waProcs = @("WhatsApp.Root.exe", "msedgewebview2.exe")
+        # target_processes 同步增删该目标相关的进程名
         $procs = @()
         if ($cfg.target_processes) { $procs = @($cfg.target_processes) }
         if ($Enabled) {
-            foreach ($p in $waProcs) {
+            foreach ($p in $App.TargetProcesses) {
                 if (-not ($procs | Where-Object { $_ -ieq $p })) { $procs += $p }
             }
         } else {
-            $procs = @($procs | Where-Object { $waProcs -notcontains $_ })
+            $procs = @($procs | Where-Object { $App.TargetProcesses -notcontains $_ })
         }
         $cfg | Add-Member -NotePropertyName "target_processes" -NotePropertyValue $procs -Force
 
@@ -172,8 +351,8 @@ function Set-WhatsAppConfigInConfig {
     }
 }
 
-function New-WhatsAppShortcut {
-    param([string]$LauncherPath, [string]$IconPath)
+function New-LauncherShortcut {
+    param([PSCustomObject]$App, [string]$LauncherPath, [string]$IconPath)
     $created = 0
     try {
         $shell = New-Object -ComObject WScript.Shell
@@ -181,12 +360,14 @@ function New-WhatsAppShortcut {
         Write-Host "  [!] 无法创建快捷方式（WScript.Shell 不可用）：$($_.Exception.Message)" -ForegroundColor Yellow
         return 0
     }
-    foreach ($path in @(Get-WhatsAppShortcutPaths)) {
+    foreach ($path in @(Get-LauncherShortcutPaths $App)) {
         try {
             $sc = $shell.CreateShortcut($path)
             $sc.TargetPath = $LauncherPath
+            # 同一个启动器服务多个商店应用，用 --target 指定本次要拉起谁
+            $sc.Arguments = "--target $($App.Key)"
             $sc.WorkingDirectory = (Split-Path -Parent $LauncherPath)
-            $sc.Description = "通过 Proxy-AiApp 启动 WhatsApp（自动走本地代理）"
+            $sc.Description = "通过 Proxy-AiApp 启动 $($App.Name)（自动走本地代理）"
             if ($IconPath -and (Test-Path $IconPath)) {
                 # IconLocation 需要 "绝对路径,图标序号" 格式
                 $sc.IconLocation = "$IconPath,0"
@@ -200,9 +381,10 @@ function New-WhatsAppShortcut {
     return $created
 }
 
-function Remove-WhatsAppShortcut {
+function Remove-LauncherShortcut {
+    param([PSCustomObject]$App)
     $removed = 0
-    foreach ($path in @(Get-WhatsAppShortcutPaths)) {
+    foreach ($path in @(Get-LauncherShortcutPaths $App)) {
         if (-not (Test-Path $path)) { continue }
         try {
             Remove-Item $path -Force -ErrorAction Stop
@@ -261,16 +443,16 @@ function Get-MsixSlotDirectory {
     return $null
 }
 
-# 关闭 WhatsApp 及其 WebView2 子进程。
+# 关闭某个启动器型目标及其子进程。
 # msedgewebview2.exe 是全系统共用名（Windows 搜索、小游戏、Teams 等都在用），
 # 按名字一刀切会误杀别的应用，因此这里按父子链定位：只结束挂在
-# WhatsApp.Root 之下的那些 WebView2 进程。
-function Stop-WhatsAppProcesses {
-    param([PSCustomObject]$Slot)
-    $roots = @(Get-Process -Name "WhatsApp.Root" -ErrorAction SilentlyContinue)
+# 宿主进程之下、且属于本目标的那批子进程。
+function Stop-LauncherProcesses {
+    param([PSCustomObject]$App)
+    $roots = @(Get-Process -Name $App.RootProcess -ErrorAction SilentlyContinue)
     if ($roots.Count -eq 0) { return $false }
 
-    # 采集 WhatsApp.Root 的全部后代 PID
+    # 采集宿主进程的全部后代 PID
     $descendants = @()
     try {
         $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
@@ -298,7 +480,7 @@ function Stop-WhatsAppProcesses {
     } catch {}
 
     Write-Host ("  [*] 关闭 {0}：{1} 个主进程 + {2} 个子进程（先优雅关闭窗口，未保存的内容请先自行保存）" -f `
-        $Slot.Name, $roots.Count, $descendants.Count) -ForegroundColor DarkGray
+        $App.Name, $roots.Count, $descendants.Count) -ForegroundColor DarkGray
 
     foreach ($p in $roots) {
         try { $null = $p.CloseMainWindow() } catch {}
@@ -308,7 +490,7 @@ function Stop-WhatsAppProcesses {
         try { if (-not $p.HasExited) { $null = $p.Kill() } } catch {}
     }
     Start-Sleep -Seconds 1
-    # 父进程已退出，WebView2 子进程若还残留（可能已成孤儿）一并结束
+    # 父进程已退出，子进程若还残留（可能已成孤儿）一并结束
     foreach ($c in $descendants) {
         try {
             $proc = Get-Process -Id ([int]$c.ProcessId) -ErrorAction SilentlyContinue
@@ -409,6 +591,12 @@ function Start-SlotApp {
 # 统一构造接口/界面所需的槽位摘要
 function Convert-SlotToApiObject {
     param([PSCustomObject]$Slot)
+    $portConflict = $false
+    $portConflicts = @()
+    if ($Slot.PSObject.Properties.Name -contains "PortConflict") {
+        $portConflict = [bool]$Slot.PortConflict
+        $portConflicts = @($Slot.PortConflicts)
+    }
     return @{
         key       = $Slot.Key
         name      = $Slot.Name
@@ -417,6 +605,9 @@ function Convert-SlotToApiObject {
         directory = $Slot.Directory
         installed = $Slot.Installed
         aumid     = if ($Slot.PSObject.Properties.Name -contains "Aumid") { $Slot.Aumid } else { "" }
+        # 登录回调端口被系统排除 → 登录必失败（os error 10013），与代理无关
+        port_conflict  = $portConflict
+        port_conflicts = $portConflicts
     }
 }
 
@@ -485,7 +676,7 @@ function Get-AppSlotStatus {
             Directory    = if ($agIdeDir) { $agIdeDir } else { "" }
             Installed    = if ($agIdeDir) { Test-Path (Join-Path $agIdeDir "version.dll") } else { $false }
         }
-    ) + (Get-MsixSlotStatus) + @(Get-WhatsAppSlotStatus)
+    ) + (Get-MsixSlotStatus) + @($LauncherApps | ForEach-Object { Get-LauncherSlotStatus $_ })
 }
 
 # 商店包槽位：目录随版本变化，只按包名动态定位，再判断是否已投放
@@ -577,20 +768,25 @@ function Install-ProxyToSlot {
 $ProxyPayloadFiles = @("version.dll", "dbghelp.dll", "antigravity_proxy.dll", "config.json", "index.html", "config-web.html")
 
 # ---------------------------------------------------------------------------
-# 启动器型目标（WhatsApp）：包目录写不进去，改为部署 ProxyLauncher.exe +
-# 快捷方式 + 回写 AUMID，由启动器在运行时注入。
+# 启动器型目标（WhatsApp / ChatGPT 等）：包目录写不进去，改为部署
+# ProxyLauncher.exe + 快捷方式 + 回写 AUMID，由启动器在运行时注入。
 # ---------------------------------------------------------------------------
 function Install-LauncherProxy {
     param([PSCustomObject]$Slot)
+    $App = $Slot.LauncherApp
+    if (-not $App) {
+        Write-Host "  [!] 启动器目标缺少描述信息，已跳过。" -ForegroundColor Yellow
+        return $false
+    }
     if (-not $Slot.Found -or [string]::IsNullOrWhiteSpace($Slot.Aumid)) {
-        Write-Host "  [!] 本机未检测到 $($Slot.Name)（微软商店版），已跳过。" -ForegroundColor Yellow
+        Write-Host "  [!] 本机未检测到 $($App.Name)（微软商店版），已跳过。" -ForegroundColor Yellow
         return $false
     }
 
-    $launcher = Join-Path $CoreDir $WhatsAppLauncherName
+    $launcher = Join-Path $CoreDir $LauncherName
     if (-not (Test-Path $launcher)) {
         # 发布包里自带；开发态从构建目录补一份
-        $built = Join-Path $AppRoot "_temp\build-x64\Release\$WhatsAppLauncherName"
+        $built = Join-Path $AppRoot "_temp\build-x64\Release\$LauncherName"
         if (Test-Path $built) {
             try {
                 Copy-Item $built $launcher -Force -ErrorAction Stop
@@ -599,14 +795,14 @@ function Install-LauncherProxy {
                 return $false
             }
         } else {
-            Write-Host "  [!] 未找到启动器 $WhatsAppLauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
+            Write-Host "  [!] 未找到启动器 $LauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
             return $false
         }
     }
 
-    # 投放前先关掉 WhatsApp：注入的 version.dll 会被进程占用，
+    # 投放前先关掉目标应用：注入的 version.dll 会被进程占用，
     # 不先结束进程就复制，文件占用会导致覆盖失败。
-    $wasRunning = Stop-WhatsAppProcesses $Slot
+    $wasRunning = Stop-LauncherProcesses $App
 
     # 代理主体必须与启动器同目录，启动器注入的也是这一份
     if (-not (Test-Path (Join-Path $CoreDir "version.dll"))) {
@@ -623,28 +819,35 @@ function Install-LauncherProxy {
         }
     }
 
-    if (-not (Set-WhatsAppConfigInConfig -Aumid $Slot.Aumid -Enabled $true)) {
+    if (-not (Set-LauncherConfigInConfig -App $App -Aumid $Slot.Aumid -Enabled $true)) {
         Write-Host "  [!] 写入 config.json 失败，已中止安装。" -ForegroundColor Red
         return $false
     }
 
-    $iconPath = Install-WhatsAppIcon
-    $shortcutCount = New-WhatsAppShortcut -LauncherPath $launcher -IconPath $iconPath
+    $iconPath = Install-LauncherIcon $App
+    $shortcutCount = New-LauncherShortcut -App $App -LauncherPath $launcher -IconPath $iconPath
     if ($shortcutCount -le 0) {
-        Write-Host "  [!] 快捷方式创建失败，可手动运行 $launcher 启动。" -ForegroundColor Yellow
+        Write-Host "  [!] 快捷方式创建失败，可手动运行 $launcher --target $($App.Key) 启动。" -ForegroundColor Yellow
         return $false
     }
 
-    Write-Host "  [OK] 已为 $($Slot.Name) 配置启动器代理：$launcher" -ForegroundColor Green
-    Write-Host "      已创建快捷方式「$WhatsAppShortcutName」（开始菜单 + 桌面），请用该快捷方式启动 WhatsApp。" -ForegroundColor DarkGray
+    Write-Host "  [OK] 已为 $($App.Name) 配置启动器代理：$launcher" -ForegroundColor Green
+    Write-Host "      已创建快捷方式「$($App.ShortcutName)」（开始菜单 + 桌面），请用该快捷方式启动 $($App.Name)。" -ForegroundColor DarkGray
     if ($iconPath) {
         Write-Host "      快捷方式图标：$iconPath" -ForegroundColor DarkGray
     }
 
+    # 登录回调端口被系统排除的话，代理本身能装上，但登录一定会失败。
+    # 这时把修复方法直接打出来，免得用户以为是代理坏了。
+    $conflicts = Get-LoginCallbackPortConflicts -App $App
+    if ($conflicts.Count -gt 0) {
+        Write-LoginCallbackConflictHint -App $App -Conflicts $conflicts
+    }
+
     if ($wasRunning) {
-        Write-Host "  [*] 正在通过启动器重新拉起 $($Slot.Name)..." -ForegroundColor DarkGray
+        Write-Host "  [*] 正在通过启动器重新拉起 $($App.Name)..." -ForegroundColor DarkGray
         try {
-            Start-Process -FilePath $launcher -WorkingDirectory $CoreDir | Out-Null
+            Start-Process -FilePath $launcher -ArgumentList "--target $($App.Key)" -WorkingDirectory $CoreDir | Out-Null
         } catch {
             Write-Host "  [!] 自动启动失败：$($_.Exception.Message)" -ForegroundColor Yellow
         }
@@ -697,29 +900,35 @@ function Uninstall-ProxyFromSlot {
         # 启动器型目标：注入的 DLL 已被目标进程加载，文件被占用期间删不干净，
         # 且 Hook 仍留在进程里继续生效（看着像卸载了其实还在走代理）。
         # 必须先结束进程，卸载才算真正生效。
-        $wasRunning = Stop-WhatsAppProcesses $Slot
-        $removed = Remove-WhatsAppShortcut
-        $launcher = Join-Path $CoreDir $WhatsAppLauncherName
-        if (Test-Path $launcher) {
+        $App = $Slot.LauncherApp
+        $wasRunning = Stop-LauncherProcesses $App
+        $removed = Remove-LauncherShortcut $App
+        # 启动器是多个商店应用共用的：只有没有别的目标在用时才删除 exe
+        $keepLauncher = Test-OtherLauncherInstalled $App
+        $launcher = Join-Path $CoreDir $LauncherName
+        if (-not $keepLauncher -and (Test-Path $launcher)) {
             try {
                 Remove-Item $launcher -Force -ErrorAction Stop
             } catch {}
         }
-        $icon = Join-Path $CoreDir $WhatsAppIconName
+        $icon = Join-Path $CoreDir $App.IconName
         if (Test-Path $icon) {
             try {
                 Remove-Item $icon -Force -ErrorAction Stop
             } catch {}
         }
-        # 关闭 whatsapp 开关并摘掉 target_processes 里的相关进程名，
+        # 关闭该目标的开关并摘掉 target_processes 里的相关进程名，
         # 否则 msedgewebview2.exe 会继续匹配到别的 WebView2 应用
-        $cfgOk = Set-WhatsAppConfigInConfig -Enabled $false
-        Write-Host "  [OK] 已移除 $($Slot.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
+        $cfgOk = Set-LauncherConfigInConfig -App $App -Enabled $false
+        Write-Host "  [OK] 已移除 $($App.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
+        if ($keepLauncher) {
+            Write-Host "      保留共享启动器 $LauncherName（其它商店应用仍在使用）。" -ForegroundColor DarkGray
+        }
         if ($wasRunning) {
-            Write-Host "      已结束正在运行的 $($Slot.Name)（注入的代理已随进程退出失效）。" -ForegroundColor DarkGray
+            Write-Host "      已结束正在运行的 $($App.Name)（注入的代理已随进程退出失效）。" -ForegroundColor DarkGray
         }
         if (-not $cfgOk) {
-            Write-Host "  [!] config.json 中的 WhatsApp 配置未能清除，可在配置网页里手动关闭。" -ForegroundColor Yellow
+            Write-Host "  [!] config.json 中的 $($App.Name) 配置未能清除，可在配置网页里手动关闭。" -ForegroundColor Yellow
         }
         return
     }
@@ -1423,6 +1632,16 @@ while ($true) {
         } else {
             Write-Host ("  - {0,-16} [未检测到]" -f $s.Name) -ForegroundColor DarkGray
         }
+    }
+
+    # 登录回调端口被系统排除 → 登录必失败，但代理本身是好的。
+    # 在菜单顶部显眼位置提示，免得用户误判成代理坏了。
+    $conflictSlots = @($slots | Where-Object { $_.PSObject.Properties.Name -contains "PortConflict" -and $_.PortConflict })
+    if ($conflictSlots.Count -gt 0) {
+        foreach ($cs in $conflictSlots) {
+            Write-Host ("  [!] {0} 登录端口 {1} 被系统排除，登录会失败（os error 10013）" -f $cs.Name, ($cs.PortConflicts -join ', ')) -ForegroundColor Red
+        }
+        Write-Host "      与代理无关；修复方法见下方「安装该目标」时的提示。" -ForegroundColor DarkGray
     }
 
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray

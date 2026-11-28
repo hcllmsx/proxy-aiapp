@@ -70,22 +70,28 @@ namespace Core {
         std::vector<RoutingRule> rules;
     };
 
-    // ============= 商店版 WhatsApp 启动器配置 =============
-    // 微软商店版 WhatsApp 的包目录受系统写保护（WindowsApps 不允许普通进程写入），
-    // 无法像 Gemini 那样把 version.dll 直接投放进去，因此改用「运行时注入」：
-    // 由 ProxyLauncher.exe 激活应用，并在进程刚起来的一瞬注入代理 DLL。
-    struct WhatsAppConfig {
+    // ============= 商店应用「启动器型」代理配置 =============
+    // 微软商店应用（WhatsApp / ChatGPT 等）的包目录受系统写保护
+    // （WindowsApps 不允许普通进程写入），无法像 Gemini 那样把 version.dll
+    // 直接投放进去，因此改用「运行时注入」：由 ProxyLauncher.exe 激活应用，
+    // 并在进程刚起来的一瞬注入代理 DLL，再按后代链追踪承载网络栈的子进程。
+    //
+    // 通用结构：新增一个商店应用只需在 config.json 里加一段同名配置，
+    // 并在 ProxyLauncher 的目标表里登记 key 即可。
+    struct LauncherAppConfig {
         bool enabled = true;
         // 应用标识（AUMID）：<包家族名>!<应用 ID>，安装脚本会在检测到应用后回填
-        std::string aumid = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App";
-        // 宿主进程名（.NET + WinUI 外壳）
-        std::string rootProcess = "WhatsApp.Root.exe";
-        // 承载聊天界面与网络栈的 WebView2 宿主进程名
-        std::string webviewProcess = "msedgewebview2.exe";
-        // 启动后持续追踪后代进程的秒数（覆盖 WebView2 子进程的延迟创建）
+        std::string aumid;
+        // 宿主进程名（应用主进程）
+        std::string rootProcess;
+        // 需要注入的子进程名（承载网络栈 / 后台服务的进程）
+        std::vector<std::string> childProcesses;
+        // 启动后持续追踪后代进程的秒数（覆盖子进程的延迟创建）
         int watchSeconds = 45;
-        // 已注入即视为成功，不再重复注入
-        bool forceRestart = true; // 目标已在运行时先退出再重启，保证首屏就走代理
+        // 目标已在运行时先退出再重启，保证首屏就走代理
+        bool forceRestart = true;
+        // 界面与日志用的显示名
+        std::string displayName;
     };
 
     // ============= 代理路由规则 =============
@@ -662,6 +668,23 @@ namespace Core {
         }
 
     public:
+        // 各商店应用的启动器默认值。config.json 里没有对应段时沿用这里，
+        // 保证「只装 DLL 不改配置」也能正常工作。
+        Config() {
+            whatsapp.displayName = "WhatsApp";
+            whatsapp.aumid = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App";
+            whatsapp.rootProcess = "WhatsApp.Root.exe";
+            whatsapp.childProcesses = {"msedgewebview2.exe"};
+
+            chatgpt.displayName = "ChatGPT";
+            chatgpt.aumid = "OpenAI.Codex_2p2nqsd0c76g0!App";
+            chatgpt.rootProcess = "ChatGPT.exe";
+            // ChatGPT 是 Electron 应用：界面与网络栈都在 ChatGPT.exe 的
+            // utility 子进程里，另外还有 codex.exe 这个 Rust CLI 负责真正的
+            // API 通信，三者都要注入才算完整走代理。
+            chatgpt.childProcesses = {"ChatGPT.exe", "codex.exe"};
+        }
+
         ProxyConfig proxy;
         FakeIPConfig fakeIp;
         TimeoutConfig timeout;
@@ -671,7 +694,8 @@ namespace Core {
         std::string uiLoadNotify = "once";    // 加载提示策略：once/none/messagebox，默认每个版本成功提示一次
         std::string buildVersion = "0";        // 来自 config.json 的 _version，用于更新检查比较
         UpdateConfig updates;                  // GitHub Release 更新检查配置（默认关闭）
-        WhatsAppConfig whatsapp;               // 商店版 WhatsApp 启动器配置
+        LauncherAppConfig whatsapp;            // 商店版 WhatsApp 启动器配置
+        LauncherAppConfig chatgpt;             // 商店版 ChatGPT 启动器配置
         bool childInjection = true;     // Phase 2: 是否自动注入子进程
         // 子进程注入模式：
         // - "filtered"（默认）：按 target_processes 过滤
@@ -1097,26 +1121,48 @@ namespace Core {
                     Logger::Info("已加载目标进程列表, 共 " + std::to_string(targetProcesses.size()) + " 项");
                 }
 
-                // 商店版 WhatsApp 启动器配置
-                if (j.contains("whatsapp") && j["whatsapp"].is_object()) {
-                    const auto& wa = j["whatsapp"];
-                    whatsapp.enabled = wa.value("enabled", whatsapp.enabled);
-                    if (wa.contains("aumid") && wa["aumid"].is_string()) {
-                        whatsapp.aumid = wa["aumid"].get<std::string>();
+                // 商店应用启动器配置（whatsapp / chatgpt 等）
+                // 通用解析：段名与结构一致，新增应用只需再加一段调用。
+                auto parseLauncherApp = [&](const char* key, LauncherAppConfig& out) {
+                    if (!j.contains(key) || !j[key].is_object()) return;
+                    const auto& node = j[key];
+                    out.enabled = node.value("enabled", out.enabled);
+                    if (node.contains("display_name") && node["display_name"].is_string()) {
+                        out.displayName = node["display_name"].get<std::string>();
                     }
-                    if (wa.contains("root_process") && wa["root_process"].is_string()) {
-                        whatsapp.rootProcess = wa["root_process"].get<std::string>();
+                    if (node.contains("aumid") && node["aumid"].is_string()) {
+                        out.aumid = node["aumid"].get<std::string>();
                     }
-                    if (wa.contains("webview_process") && wa["webview_process"].is_string()) {
-                        whatsapp.webviewProcess = wa["webview_process"].get<std::string>();
+                    if (node.contains("root_process") && node["root_process"].is_string()) {
+                        out.rootProcess = node["root_process"].get<std::string>();
                     }
-                    whatsapp.watchSeconds = wa.value("watch_seconds", whatsapp.watchSeconds);
-                    whatsapp.forceRestart = wa.value("force_restart", whatsapp.forceRestart);
-                }
-                if (whatsapp.watchSeconds <= 0) {
-                    Logger::Warn("配置: whatsapp.watch_seconds 非法(" + std::to_string(whatsapp.watchSeconds) + ")，已回退为 45");
-                    whatsapp.watchSeconds = 45;
-                }
+                    if (node.contains("child_processes") && node["child_processes"].is_array()) {
+                        out.childProcesses.clear();
+                        for (const auto& item : node["child_processes"]) {
+                            if (!item.is_string()) continue;
+                            std::string name = item.get<std::string>();
+                            trimInPlace(name);
+                            if (!name.empty()) out.childProcesses.push_back(name);
+                        }
+                    } else if (node.contains("webview_process") && node["webview_process"].is_string()) {
+                        // 兼容旧版配置：webview_process 单值写法
+                        std::string name = node["webview_process"].get<std::string>();
+                        trimInPlace(name);
+                        if (!name.empty()) {
+                            out.childProcesses.clear();
+                            out.childProcesses.push_back(name);
+                        }
+                    }
+                    out.watchSeconds = node.value("watch_seconds", out.watchSeconds);
+                    out.forceRestart = node.value("force_restart", out.forceRestart);
+                    if (out.watchSeconds <= 0) {
+                        Logger::Warn(std::string("配置: ") + key +
+                                     ".watch_seconds 非法，已回退为 45");
+                        out.watchSeconds = 45;
+                    }
+                };
+                parseLauncherApp("whatsapp", whatsapp);
+                parseLauncherApp("chatgpt", chatgpt);
 
                 Logger::Info("配置: proxy=" + proxy.host + ":" + std::to_string(proxy.port) +
                              " type=" + proxy.type +
@@ -1131,7 +1177,9 @@ namespace Core {
                              ", updates.delay_ms=" + std::to_string(updates.check_delay_ms) +
                              ", updates.mirrors=" + std::to_string(updates.mirrors.size()) +
                              ", whatsapp.enabled=" + std::string(whatsapp.enabled ? "true" : "false") +
-                             ", whatsapp.aumid=" + whatsapp.aumid);
+                             ", whatsapp.aumid=" + whatsapp.aumid +
+                             ", chatgpt.enabled=" + std::string(chatgpt.enabled ? "true" : "false") +
+                             ", chatgpt.aumid=" + chatgpt.aumid);
 
                 // CRIT-1/2/WARN-3: 仅在 Load() 成功返回前输出“有效 CIDR 统计 + 跳过数量”，避免失败时误导
                 Logger::Info("路由规则: 编译统计: 有效 IPv4 CIDR=" + std::to_string(rules.compiled_valid_cidr_v4) +

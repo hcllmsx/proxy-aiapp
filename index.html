@@ -16,7 +16,7 @@
           <span class="badge">v26.11.28</span>
           <span class="badge-online" id="localBridgeBadge">本地直写服务已连接</span>
         </h1>
-        <p id="subHeaderText">统一支持 Google Gemini 桌面版、Antigravity / Antigravity IDE、商店版 Claude 与商店版 WhatsApp</p>
+        <p id="subHeaderText">统一支持 Google Gemini 桌面版、Antigravity / Antigravity IDE、商店版 Claude、商店版 WhatsApp 与商店版 ChatGPT</p>
       </div>
       <div class="mode-switch">
         <button type="button" class="mode-btn active" id="btnSimple" onclick="setMode('simple')">简单模式</button>
@@ -138,10 +138,23 @@
           </div>
           <input type="checkbox" id="chkWhatsApp" checked onchange="onTargetCheckChange()">
         </label>
+        <label class="app-check">
+          <div class="app-check-main">
+            <img class="app-icon" src="assets/img/ChatGPT.png" alt="ChatGPT">
+            <div>
+              <div class="app-check-title">
+                ChatGPT
+                <span class="install-tag" id="tagChatGPT">启动器注入</span>
+              </div>
+              <div class="app-check-sub" id="subChatGPT">ChatGPT.exe 网络服务进程 + codex.exe</div>
+            </div>
+          </div>
+          <input type="checkbox" id="chkChatGPT" checked onchange="onTargetCheckChange()">
+        </label>
       </div>
 
       <div class="card-desc" style="margin-bottom: 12px;">
-        提示：微软商店版 WhatsApp 的安装目录受系统保护，无法直接投放代理文件。勾选后会为你生成「WhatsApp（代理）」快捷方式（开始菜单 + 桌面），<strong>请用该快捷方式启动 WhatsApp</strong>，它会在启动瞬间注入代理，无需开启 TUN 模式或手动切换系统代理。
+        提示：微软商店版 WhatsApp 与 ChatGPT 的安装目录受系统保护，无法直接投放代理文件。勾选后会为你生成对应的「（代理）」快捷方式（开始菜单 + 桌面），<strong>请用该快捷方式启动应用</strong>，它会在启动瞬间注入代理，无需开启 TUN 模式或手动切换系统代理。
       </div>
 
       <div class="form-grid">

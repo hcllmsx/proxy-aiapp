@@ -39,26 +39,26 @@
     "chrome_crashpad_handler.exe",
     "crashpad-handler.exe"
   ],
-  "target_processes": [
-    "Antigravity.exe",
-    "Antigravity IDE.exe",
-    "Gemini.exe",
-    "Claude.exe",
-    "cowork-svc.exe",
-    "language_server_windows_x64.exe",
-    "language_server.exe",
-    "node.exe",
-    "agy.exe",
-    "WhatsApp.Root.exe",
-    "msedgewebview2.exe"
-  ],
   "whatsapp": {
-    "root_process": "WhatsApp.Root.exe",
-    "webview_process": "msedgewebview2.exe",
     "watch_seconds": 45,
     "force_restart": true,
     "aumid": "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
-    "enabled": true
+    "enabled": true,
+    "root_process": "WhatsApp.Root.exe",
+    "child_processes": [
+      "msedgewebview2.exe"
+    ]
+  },
+  "chatgpt": {
+    "watch_seconds": 45,
+    "force_restart": true,
+    "aumid": "OpenAI.Codex_2p2nqsd0c76g0!App",
+    "enabled": true,
+    "root_process": "ChatGPT.exe",
+    "child_processes": [
+      "ChatGPT.exe",
+      "codex.exe"
+    ]
   },
   "traffic_logging": false,
   "diagnostics": {
@@ -76,5 +76,20 @@
     "mirrors": [
       "https://gh-proxy.com/"
     ]
-  }
+  },
+  "target_processes": [
+    "Antigravity.exe",
+    "Antigravity IDE.exe",
+    "Gemini.exe",
+    "Claude.exe",
+    "cowork-svc.exe",
+    "language_server_windows_x64.exe",
+    "language_server.exe",
+    "node.exe",
+    "agy.exe",
+    "ChatGPT.exe",
+    "codex.exe",
+    "WhatsApp.Root.exe",
+    "msedgewebview2.exe"
+  ]
 }
