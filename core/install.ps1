@@ -186,17 +186,10 @@ function Get-LauncherSlotStatus {
     }
 }
 
-# 判断除当前目标外，是否还有别的启动器型目标在用 ProxyLauncher.exe。
-# 共用同一个启动器时，卸载其中一个不能把 exe 删掉，否则另一个目标直接失效。
-function Test-OtherLauncherInstalled {
-    param([PSCustomObject]$App)
-    foreach ($other in $LauncherApps) {
-        if ($other.Key -eq $App.Key) { continue }
-        $exists = @(Get-LauncherShortcutPaths $other | Where-Object { Test-Path $_ })
-        if ($exists.Count -gt 0) { return $true }
-    }
-    return $false
-}
+# 以前这里有 Test-OtherLauncherInstalled：判断「是否还有别的商店应用共用启动器」，
+# 用来决定卸载时能不能删掉 core\ProxyLauncher.exe。
+# 现在卸载一律不删发布包自带文件（那属于安装介质，不属于安装痕迹），
+# 这个判断已经没有意义，故移除。
 
 # ---------------------------------------------------------------------------
 # 本地登录回调端口冲突检测
@@ -343,7 +336,10 @@ function Set-LauncherConfigInConfig {
         $cfg | Add-Member -NotePropertyName "target_processes" -NotePropertyValue $procs -Force
 
         $jsonOut = $cfg | ConvertTo-Json -Depth 10
-        [System.IO.File]::WriteAllText($ConfigFile, $jsonOut + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        # 统一成 CRLF 再落盘：项目 .editorconfig 要求 CRLF。
+        # 之前直接写 LF，安装一次就会让整个 config.json 在 git 里显示为全量改动。
+        $jsonOut = ($jsonOut -replace "`r`n", "`n") -replace "`n", "`r`n"
+        [System.IO.File]::WriteAllText($ConfigFile, $jsonOut + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
         return $true
     } catch {
         Write-Host "  [!] 回写 config.json 失败：$($_.Exception.Message)" -ForegroundColor Yellow
@@ -795,7 +791,17 @@ function Install-LauncherProxy {
                 return $false
             }
         } else {
-            Write-Host "  [!] 未找到启动器 $LauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
+            # 包根有 index.html + assets，说明这是一份解压完整的发布包目录，
+            # core\ 里却少了启动器 —— 多半是之前执行「全部卸载」时把包内文件删掉了。
+            # 这种情况下在当前目录重装补不回来，必须重新解压一份完整的发布包。
+            $isUnpackedPackage = (Test-Path (Join-Path $AppRoot "index.html")) -and (Test-Path (Join-Path $AppRoot "assets"))
+            if ($isUnpackedPackage) {
+                Write-Host "  [!] 缺少 $LauncherName：当前目录里的发布包已不完整。" -ForegroundColor Red
+                Write-Host "      多半是之前执行「全部卸载」时误删了包内文件。" -ForegroundColor Yellow
+                Write-Host "      请重新解压一份完整的发布包后再安装（在当前目录直接重装无法恢复）。" -ForegroundColor Yellow
+            } else {
+                Write-Host "  [!] 未找到启动器 $LauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
+            }
             return $false
         }
     }
@@ -903,16 +909,15 @@ function Uninstall-ProxyFromSlot {
         $App = $Slot.LauncherApp
         $wasRunning = Stop-LauncherProcesses $App
         $removed = Remove-LauncherShortcut $App
-        # 启动器是多个商店应用共用的：只有没有别的目标在用时才删除 exe
-        $keepLauncher = Test-OtherLauncherInstalled $App
-        $launcher = Join-Path $CoreDir $LauncherName
-        if (-not $keepLauncher -and (Test-Path $launcher)) {
-            try {
-                Remove-Item $launcher -Force -ErrorAction Stop
-            } catch {}
-        }
+        # 注意：core\ProxyLauncher.exe 是发布包自带的文件，不是投放出去的东西。
+        # 卸载只清「安装痕迹」（快捷方式、注入、配置），绝不动安装介质 ——
+        # 以前这里会删掉它，导致「卸载 → 在同一目录重装」直接失败，
+        # 报"未找到启动器 ProxyLauncher.exe，发布包可能不完整"。
         $icon = Join-Path $CoreDir $App.IconName
-        if (Test-Path $icon) {
+        $iconSrc = Join-Path $AppRoot "assets\img\$($App.IconName)"
+        if ((Test-Path $icon) -and (Test-Path $iconSrc)) {
+            # 图标是安装时从 assets\img\ 复制来的副本：
+            # 只有包里的原件还在时才删这份副本，否则保留（保证重装后图标仍可用）。
             try {
                 Remove-Item $icon -Force -ErrorAction Stop
             } catch {}
@@ -921,9 +926,7 @@ function Uninstall-ProxyFromSlot {
         # 否则 msedgewebview2.exe 会继续匹配到别的 WebView2 应用
         $cfgOk = Set-LauncherConfigInConfig -App $App -Enabled $false
         Write-Host "  [OK] 已移除 $($App.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
-        if ($keepLauncher) {
-            Write-Host "      保留共享启动器 $LauncherName（其它商店应用仍在使用）。" -ForegroundColor DarkGray
-        }
+        Write-Host "      已保留发布包自带的 $LauncherName（卸载只清安装痕迹，不动包内文件）。" -ForegroundColor DarkGray
         if ($wasRunning) {
             Write-Host "      已结束正在运行的 $($App.Name)（注入的代理已随进程退出失效）。" -ForegroundColor DarkGray
         }

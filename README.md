@@ -117,6 +117,18 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 
 安装 / 状态检查时脚本会自动检测这类冲突并给出对应的修复命令。
 
+#### 卸载后重新安装报「未找到启动器 ProxyLauncher.exe」
+
+```
+[!] 未找到启动器 ProxyLauncher.exe，发布包可能不完整，请重新下载最新发布版。
+```
+
+**多数情况不是下载不完整，而是发布包目录被卸载流程破坏了。** 商店版 WhatsApp / ChatGPT 走启动器注入，`ProxyLauncher.exe` 随发布包放在 `core\` 目录里；旧版本执行「全部卸载」时会把它当成安装痕迹一并删掉，于是同一个目录里再装就找不到它了。
+
+**处理办法：重新解压一份完整的发布包**（覆盖原目录或换个目录解压都行），再运行 `install.bat`。已经被破坏的目录里直接重装是补不回来的——包里已经没有那个文件了。
+
+> v26.11.28 起，卸载只清理安装痕迹（快捷方式、注入、配置），不再删除包内自带文件，卸载后可直接在同一目录重新安装。
+
 ## 致谢
 
 - **[antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)**：本项目的核心 C++ 代理注入底座直接衍生（Fork）自该项目，在此基础上扩展了 Google Gemini 桌面端（Chromium `NetworkService` 与非阻塞 `WSAEventSelect` 套接字）支持及双模式直写配置器，特此致谢。

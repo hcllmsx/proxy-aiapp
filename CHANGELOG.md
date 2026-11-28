@@ -4,9 +4,10 @@
 
 - 新增：支持微软商店版 WhatsApp（`WhatsApp.Root.exe`）。其安装目录位于 `WindowsApps` 下受系统写保护，无法像其它客户端那样投放 `version.dll`，改为随包提供 `ProxyLauncher.exe` 启动器：激活应用后立即注入代理，并按后代链追踪注入承载聊天界面与网络栈的 WebView2 进程，**无需开启 TUN 模式或手动切换系统代理，只要本机代理软件在运行即可正常收发消息**。
 - 新增：支持微软商店版 ChatGPT（`ChatGPT.exe` + `codex.exe`）。同样因包目录写保护而走启动器注入，Electron 的网络服务进程与负责 API 通信的 `codex.exe` 都会被纳入注入范围，`chatgpt.com` / `ws.chatgpt.com` / `codex-cloud-backend.chatgpt.com` 等域名均走本地代理。
-- 优化：启动器由「写死 WhatsApp」改为按目标通用，支持 `--target whatsapp|chatgpt` 选择目标，多个商店应用共用同一个 `ProxyLauncher.exe`；卸载其中一个目标时不会误删共用启动器与其它目标的快捷方式。
+- 优化：启动器由「写死 WhatsApp」改为按目标通用，支持 `--target whatsapp|chatgpt` 选择目标，多个商店应用共用同一个 `ProxyLauncher.exe`；卸载时只清理当前目标，保留共用启动器与其它目标的快捷方式。
 - 优化：配置器新增 ChatGPT 卡片，与 WhatsApp 一样以「启动器注入」方式成对开关其进程条目。
 - 修复：ChatGPT 点登录报 `failed to start login server ... (os error 10013)` 的问题。ChatGPT 登录时会在本机启动 OAuth 回调服务器（`http://localhost:1455`，候选端口 `1455` / `1457` 写死在应用内），若这些端口被系统排除（Hyper-V / WSL / 容器等虚拟化组件会按 100 个一组动态预留低端口区）则 bind 失败、登录必然报错——**该故障与代理注入无关，不注入同样失败**。安装工具与配置页现会自动检测此类端口冲突，并在安装时直接给出可执行的修复命令。
+- 修复：卸载时误删发布包自带的 `ProxyLauncher.exe` 的问题。原先卸载流程把 `core\ProxyLauncher.exe` 当作安装痕迹一并删除，导致「卸载 → 在同一目录重新安装」必然失败，并提示「未找到启动器 ProxyLauncher.exe，发布包可能不完整」。现改为卸载只清理安装痕迹（快捷方式、注入、配置），不再删除包内自带文件；快捷方式图标也仅在包内原件仍在时才清理副本。安装时若确实找不到启动器，会明确区分「发布包本来就不完整」与「此前卸载误删了包内文件」两种情况，并给出对应指引。
 
 ## v26.11.26
 
