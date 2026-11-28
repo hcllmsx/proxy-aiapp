@@ -5,6 +5,14 @@ on:
   push:
     tags:
       - 'v*'
+  # 手动触发：用于同一版本号重跑构建（例如修好打包内容后覆盖网盘里的旧包）。
+  # 版本号默认取仓库的 VERSION 文件，留空即可。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空则使用仓库 VERSION 文件）'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -31,16 +39,34 @@ jobs:
         id: verify
         env:
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
+          $ErrorActionPreference = "Stop"
           $ver = (Get-Content -Raw -Encoding UTF8 "VERSION").Trim()
           if ($ver -notmatch '^\d+(\.\d+)+$') {
             throw "VERSION 内容不是合法版本号: $ver"
           }
-          $tagVer = $env:REF_NAME.TrimStart('v')
-          if ($tagVer -ne $ver) {
-            throw "Tag ($env:REF_NAME) 与 VERSION ($ver) 不一致，请先更新 VERSION 文件再打 tag。"
+
+          if ($env:EVENT_NAME -eq "workflow_dispatch") {
+            # 手动重跑：以输入版本号（若给了）或 VERSION 文件为准，不校验 tag
+            if ($env:INPUT_VERSION) {
+              $ver = $env:INPUT_VERSION.Trim()
+              if ($ver -notmatch '^\d+(\.\d+)+$') {
+                throw "输入的版本号不是合法版本号: $ver"
+              }
+            }
+            $tag = "v$ver"
+            Write-Host "手动触发模式：构建版本 $ver（tag $tag）"
+          } else {
+            $tagVer = $env:REF_NAME.TrimStart('v')
+            if ($tagVer -ne $ver) {
+              throw "Tag ($env:REF_NAME) 与 VERSION ($ver) 不一致，请先更新 VERSION 文件再打 tag。"
+            }
+            $tag = $env:REF_NAME
           }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
 
       - name: Build Release Notes
         env:
@@ -109,11 +135,17 @@ jobs:
           if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
           New-Item -ItemType Directory -Path $core -Force | Out-Null
 
+          # 编译产物：代理本体 + Antigravity CLI shim + 商店应用启动器。
+          # ProxyLauncher.exe 缺失时，商店版 WhatsApp / ChatGPT 装不了（包目录不可写），
+          # 必须打进包里，否则用户装完才发现功能缺失。
           foreach ($dll in @("version.dll", "dbghelp.dll", "antigravity_proxy.dll")) {
             $src = Join-Path $build $dll
             if (-not (Test-Path $src)) { throw "缺少编译产物：$src" }
             Copy-Item $src (Join-Path $core $dll) -Force
           }
+          $launcher = Join-Path $build "ProxyLauncher.exe"
+          if (-not (Test-Path $launcher)) { throw "缺少编译产物：$launcher" }
+          Copy-Item $launcher (Join-Path $core "ProxyLauncher.exe") -Force
           foreach ($f in @("config.json", "install.ps1")) {
             $src = Join-Path $PWD "core/$f"
             if (-not (Test-Path $src)) { throw "缺少文件：$src" }
@@ -138,6 +170,46 @@ jobs:
           if (-not (Test-Path $zip)) { throw "打包失败：$zip" }
           $size = [math]::Round((Get-Item $zip).Length / 1MB, 2)
           Write-Host "打包完成：$zip ($size MB)"
+
+      # 打包内容自检：少任何一项都不允许上传。
+      # 之前 ProxyLauncher.exe 漏打，CI 照样「成功」，用户装完才发现商店应用代理不可用。
+      - name: Verify Package Contents
+        env:
+          RELEASE_VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $PWD "out_put/Proxy-AiApp-v$($env:RELEASE_VERSION)-win-x64.zip"
+          if (-not (Test-Path $zip)) { throw "找不到打包产物：$zip" }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            # Windows 下 ZipFile 用反斜杠做条目分隔符，统一成 / 再比对
+            $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+
+            $required = @(
+              "ProxyAiApp/core/version.dll",
+              "ProxyAiApp/core/dbghelp.dll",
+              "ProxyAiApp/core/antigravity_proxy.dll",
+              "ProxyAiApp/core/ProxyLauncher.exe",
+              "ProxyAiApp/core/config.json",
+              "ProxyAiApp/core/install.ps1",
+              "ProxyAiApp/install.bat",
+              "ProxyAiApp/index.html",
+              "ProxyAiApp/VERSION",
+              "ProxyAiApp/assets/img/WhatsApp.ico",
+              "ProxyAiApp/assets/img/ChatGPT.ico"
+            )
+            $missing = @($required | Where-Object { $names -notcontains $_ })
+            if ($missing.Count -gt 0) {
+              Write-Host "发布包缺少以下必需文件："
+              foreach ($m in $missing) { Write-Host "  - $m" }
+              throw "发布包不完整，已中止上传。"
+            }
+            Write-Host "打包内容校验通过（$($names.Count) 个条目）"
+          } finally {
+            $archive.Dispose()
+          }
 
       - name: Install rclone
         run: |
@@ -177,7 +249,7 @@ jobs:
       - name: Create GitHub Release (Announcement Only)
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.verify.outputs.tag }}
           name: 'Proxy-AiApp v${{ steps.verify.outputs.version }}'
           body_path: release_notes.txt
           draft: false
