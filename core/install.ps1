@@ -796,9 +796,8 @@ function Install-LauncherProxy {
             # 这种情况下在当前目录重装补不回来，必须重新解压一份完整的发布包。
             $isUnpackedPackage = (Test-Path (Join-Path $AppRoot "index.html")) -and (Test-Path (Join-Path $AppRoot "assets"))
             if ($isUnpackedPackage) {
-                Write-Host "  [!] 缺少 $LauncherName：当前目录里的发布包已不完整。" -ForegroundColor Red
-                Write-Host "      多半是之前执行「全部卸载」时误删了包内文件。" -ForegroundColor Yellow
-                Write-Host "      请重新解压一份完整的发布包后再安装（在当前目录直接重装无法恢复）。" -ForegroundColor Yellow
+                Write-Host "  [!] 缺少 $LauncherName：当前目录里的发布包已不完整（多半是之前执行「全部卸载」时误删了包内文件）。" -ForegroundColor Red
+                Write-Host "      请重新解压一份完整的发布包后再安装，在当前目录直接重装无法恢复。" -ForegroundColor Yellow
             } else {
                 Write-Host "  [!] 未找到启动器 $LauncherName，发布包可能不完整，请重新下载最新发布版。" -ForegroundColor Red
             }
@@ -926,7 +925,6 @@ function Uninstall-ProxyFromSlot {
         # 否则 msedgewebview2.exe 会继续匹配到别的 WebView2 应用
         $cfgOk = Set-LauncherConfigInConfig -App $App -Enabled $false
         Write-Host "  [OK] 已移除 $($App.Name) 的启动器代理与快捷方式（清理 $removed 个快捷方式）。" -ForegroundColor Green
-        Write-Host "      已保留发布包自带的 $LauncherName（卸载只清安装痕迹，不动包内文件）。" -ForegroundColor DarkGray
         if ($wasRunning) {
             Write-Host "      已结束正在运行的 $($App.Name)（注入的代理已随进程退出失效）。" -ForegroundColor DarkGray
         }
@@ -960,13 +958,22 @@ function Uninstall-ProxyFromSlot {
 $CliExeNames = @("agy.exe", "antigravity-cli.exe")
 
 function Get-CliProxySourcePaths {
+    # CLI 代理靠 dbghelp.dll 转发壳 + 唯一名主体 antigravity_proxy.dll，
+    # 两者必须与代理主体同目录。发布包里它们就在 core\ 下；
+    # 开发态 core\ 里可能没有（编译产物在构建目录），故按候选目录依次回退。
+    $candidates = @()
     $dllPath = Get-DllSourcePath
-    if (-not $dllPath) { return $null }
-    $sideDir = Split-Path -Parent $dllPath
-    $shim = Join-Path $sideDir "dbghelp.dll"
-    $body = Join-Path $sideDir "antigravity_proxy.dll"
-    if (-not (Test-Path $shim) -or -not (Test-Path $body)) { return $null }
-    return [PSCustomObject]@{ Shim = $shim; Body = $body }
+    if ($dllPath) { $candidates += (Split-Path -Parent $dllPath) }
+    $candidates += (Join-Path $AppRoot "_temp\build-x64\Release")
+    $candidates += $CoreDir
+    foreach ($dir in $candidates) {
+        $shim = Join-Path $dir "dbghelp.dll"
+        $body = Join-Path $dir "antigravity_proxy.dll"
+        if ((Test-Path $shim) -and (Test-Path $body)) {
+            return [PSCustomObject]@{ Shim = $shim; Body = $body }
+        }
+    }
+    return $null
 }
 
 # 从 PATH 与 Antigravity 安装目录里收集 CLI 相关目录。
